@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "obsitocin"
+version = "0.1.0"
+description = "Auto-capture Claude Code Q&A → LLM tagging → Obsidian knowledge graph"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Yunwoo Nam" }]
+keywords = ["claude", "obsidian", "knowledge-graph", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+]
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["fastmcp>=2.0"]
+graph = ["networkx", "matplotlib", "numpy"]
+download = ["huggingface-hub"]
+
+[project.scripts]
+obsitocin = "obsitocin.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yunwoonam/obsitocin"
+Issues = "https://github.com/yunwoonam/obsitocin/issues"

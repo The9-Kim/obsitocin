@@ -1,0 +1,15 @@
+{
+  "session_id": "test-session-456",
+  "timestamp": "2026-04-05T11:00:00",
+  "cwd": "/tmp/test-project",
+  "prompt": "Python 가상환경을 어떻게 만드나요?",
+  "response": "python -m venv .venv 명령을 사용합니다.",
+  "content_hash": "xyz789abc123xyz7",
+  "status": "pending",
+  "transcript_path": "",
+  "source_type": "claude_code",
+  "source_metadata": {
+    "session_id": "test-session-456",
+    "transcript_path": ""
+  }
+}

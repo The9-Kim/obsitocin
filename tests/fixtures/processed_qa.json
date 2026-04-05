@@ -1,0 +1,33 @@
+{
+  "session_id": "test-session-789",
+  "timestamp": "2026-04-05T09:00:00",
+  "cwd": "/tmp/test-project",
+  "prompt": "Docker란 무엇인가요?",
+  "response": "Docker는 컨테이너 기반 가상화 플랫폼입니다.",
+  "content_hash": "processed123hash",
+  "status": "processed",
+  "source_type": "claude_code",
+  "tagging_result": {
+    "title": "Docker 기초 개념",
+    "should_store": true,
+    "topics": [
+      {
+        "name": "Docker",
+        "knowledge": [
+          "Docker는 컨테이너 기반 가상화 기술",
+          "docker build -t image-name . 로 이미지 빌드"
+        ]
+      }
+    ],
+    "work_summary": "Docker 기초 개념 학습",
+    "tags": ["docker", "devops", "container"],
+    "category": "devops",
+    "importance": 4,
+    "memory_type": "static",
+    "key_concepts": ["Docker"],
+    "distilled_knowledge": [
+      "Docker는 컨테이너 기반 가상화 기술",
+      "docker build -t image-name . 로 이미지 빌드"
+    ]
+  }
+}
