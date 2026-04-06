@@ -259,15 +259,18 @@ your-vault/obsitocin/
 
 ## 설정
 
-설정 파일: `~/.config/obsitocin/config.json`
+설정 파일: **`~/.config/obsitocin/config.json`**
 
 ```json
 {
-  "vault_dir": "/path/to/Obsidian Vault",
+  "vault_dir": "~/Documents/Obsitocin",
   "llm_provider": "claude",
   "embed_model_path": "/path/to/Qwen3-Embedding-0.6B-Q8_0.gguf"
 }
 ```
+
+- `vault_dir` 기본값: `~/Documents/Obsitocin` (`obsitocin init` 시 자동 생성)
+- Qwen GGUF 모델은 `~/.cache/huggingface/hub/`에서 자동 스캔 (`OBS_QWEN_MODEL_PATH` 미설정 시)
 
 우선순위: 환경 변수 → config.json → 기본값.
 
