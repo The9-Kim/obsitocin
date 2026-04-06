@@ -45,9 +45,21 @@ Claude Code 세션
 ```bash
 git clone https://github.com/The9-Kim/obsitocin
 cd obsitocin
-pip install -e .          # 기본 설치 (자동 수집 + CLI)
-pip install -e ".[mcp]"   # MCP 서버 포함 설치
+
+# macOS는 시스템 Python 보호 정책 때문에 venv 필요
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[mcp]"   # MCP 서버 포함 설치 (권장)
 ```
+
+**alias 등록** (매번 activate 없이 사용하려면):
+
+```bash
+echo 'alias obsitocin="~/work/obsitocin/.venv/bin/obsitocin"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+> 경로는 clone한 위치에 맞게 수정하세요.
 
 ### 2. LLM 준비
 
