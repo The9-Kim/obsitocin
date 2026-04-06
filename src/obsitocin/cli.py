@@ -328,6 +328,13 @@ def _cmd_init(args: argparse.Namespace) -> int:
     else:
         _echo("Claude Code hooks already registered.")
 
+    from obsitocin.hooks import register_mcp_server
+
+    if register_mcp_server(sys.executable):
+        _echo("MCP server registered in Claude Code settings.")
+    else:
+        _echo("MCP server already registered.")
+
     _install_skill()
     _echo("vault-search skill installed globally.")
     _echo()
@@ -634,12 +641,17 @@ def _cmd_organize(args: argparse.Namespace) -> int:
 
 
 def _cmd_uninstall(_: argparse.Namespace) -> int:
-    from obsitocin.hooks import unregister_hooks
+    from obsitocin.hooks import unregister_hooks, unregister_mcp_server
 
     if unregister_hooks():
         _echo("Claude Code hooks removed.")
     else:
         _echo("No hooks to remove.")
+
+    if unregister_mcp_server():
+        _echo("MCP server removed from Claude Code settings.")
+    else:
+        _echo("No MCP server to remove.")
 
     _uninstall_skill()
     _echo("vault-search skill removed.")

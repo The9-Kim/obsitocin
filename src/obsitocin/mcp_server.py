@@ -425,3 +425,8 @@ def create_server():
         return get_project_context(project=project)
 
     return mcp
+
+
+if __name__ == "__main__":
+    server = create_server()
+    server.run()

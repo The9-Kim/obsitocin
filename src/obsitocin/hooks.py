@@ -150,6 +150,84 @@ def unregister_hooks() -> bool:
     return changed
 
 
+def _find_obsitocin_bin(python_executable: str | None = None) -> str:
+    """Find the obsitocin CLI binary path."""
+    import shutil
+
+    python_bin = python_executable or sys.executable
+    bin_dir = Path(python_bin).parent
+    candidate = bin_dir / "obsitocin"
+    if candidate.exists():
+        return str(candidate)
+    found = shutil.which("obsitocin")
+    if found:
+        return found
+    return ""
+
+
+def _find_claude_bin() -> str:
+    """Find the claude CLI binary path."""
+    import shutil
+
+    return shutil.which("claude") or ""
+
+
+def register_mcp_server(python_executable: str | None = None) -> bool:
+    """Register obsitocin MCP server via `claude mcp add --scope user`.
+
+    Returns True if server was added, False if already present or failed.
+    """
+    import subprocess as sp
+
+    claude_bin = _find_claude_bin()
+    if not claude_bin:
+        return False
+
+    obsitocin_bin = _find_obsitocin_bin(python_executable)
+    if not obsitocin_bin:
+        return False
+
+    # Check if already registered
+    result = sp.run(
+        [claude_bin, "mcp", "list"],
+        capture_output=True, text=True,
+    )
+    if "obsitocin" in result.stdout:
+        return False
+
+    sp.run(
+        [claude_bin, "mcp", "add", "--scope", "local",
+         "obsitocin", "--", obsitocin_bin, "serve"],
+        capture_output=True, text=True, check=True,
+    )
+    return True
+
+
+def unregister_mcp_server() -> bool:
+    """Remove obsitocin MCP server via `claude mcp remove`.
+
+    Returns True if server was removed, False if not found or failed.
+    """
+    import subprocess as sp
+
+    claude_bin = _find_claude_bin()
+    if not claude_bin:
+        return False
+
+    result = sp.run(
+        [claude_bin, "mcp", "list"],
+        capture_output=True, text=True,
+    )
+    if "obsitocin" not in result.stdout:
+        return False
+
+    sp.run(
+        [claude_bin, "mcp", "remove", "obsitocin", "--scope", "user"],
+        capture_output=True, text=True,
+    )
+    return True
+
+
 def check_hooks() -> dict[str, bool]:
     """Check which obsitocin hooks are currently registered.
 

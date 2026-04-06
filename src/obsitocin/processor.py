@@ -241,7 +241,11 @@ def _build_existing_topics_context(cwd: str) -> str:
     if not existing_topics:
         return ""
     topics_list = ", ".join(existing_topics[:50])
-    return f"\n\n기존 주제 목록 (가능하면 이 중에서 선택):\n{topics_list}"
+    return (
+        f"\n\n=== 기존 주제 목록 (반드시 이 중에서 먼저 선택) ===\n{topics_list}\n"
+        "위 목록에 해당 내용의 주제가 이미 있으면, 반드시 기존 이름을 정확히 복사해서 사용해라. "
+        "새 주제를 만들지 마라."
+    )
 
 
 def _build_qa_tagging_prompt(qa: dict, tool_summary: dict | None = None) -> str:
@@ -292,8 +296,10 @@ JSON 구조:
     나쁜 예: "가상환경에 대해 논의했습니다", "작업 완료", "배경 작업 bg_xxx 완료"
     knowledge가 하나도 없으면 해당 topic을 넣지 마라.
   대화에 주제가 하나면 1개만 넣어라. 억지로 여러 개 만들지 마라.
-  기존 주제 목록이 제공되면, 같은 내용의 주제가 이미 있을 경우 기존 이름을 그대로 사용해라.
-  새로운 주제를 만들기 전에 기존 목록을 먼저 확인해라.{existing_context}
+  기존 주제 목록이 제공되면:
+    1. 같은 내용이나 유사한 주제가 있으면 기존 이름을 정확히 복사해서 사용해라.
+    2. "Python 가상환경 (venv)"이 이미 있는데 "Python 가상환경 관리"로 변형하지 마라.
+    3. 기존 목록에 없는 완전히 새로운 주제일 때만 새 이름을 만들어라.{existing_context}
   에이전트 운영 메타지식은 주제로 만들지 마라. 현재 프로젝트 산출물에 직접 영향을 주는 지식만 주제로 승격해라.
 
 - knowledge 추출 시 주의:
@@ -350,7 +356,8 @@ JSON 구조:
 - work_summary: 이 콘텐츠가 무엇에 관한 것인지 한 줄.
 - tags: 영문 lowercase kebab-case. 3-5개.
 - category: 가장 적합한 하나만.
-- importance: 1(사소) ~ 5(핵심 지식/정책/결정).{existing_context}"""
+- importance: 1(사소) ~ 5(핵심 지식/정책/결정).
+- 기존 주제 목록이 제공되면, 유사한 주제가 이미 있을 경우 기존 이름을 정확히 복사해서 사용해라. 새 주제를 만들지 마라.{existing_context}"""
 
 
 def build_tagging_prompt(item: dict, tool_summary: dict | None = None) -> str:

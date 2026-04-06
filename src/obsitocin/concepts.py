@@ -62,6 +62,58 @@ def extract_concept_aliases(text: str) -> list[str]:
     return aliases
 
 
+def _tokenize_key(text: str) -> set[str]:
+    """Split a lookup key into tokens for fuzzy matching."""
+    return set(concept_lookup_key(text).split())
+
+
+def find_fuzzy_topic_match(
+    candidate: str,
+    existing_index: dict[str, object],
+    threshold: float = 0.7,
+) -> object | None:
+    """Find best fuzzy match for candidate topic in existing index.
+
+    Keys of existing_index must be concept_lookup_key values.
+    Returns the value from existing_index if a match is found, None otherwise.
+    Exact match is tried first (fast path).
+    """
+    exact_key = concept_lookup_key(candidate)
+    if exact_key in existing_index:
+        return existing_index[exact_key]
+
+    candidate_tokens = _tokenize_key(candidate)
+    if not candidate_tokens or len(candidate_tokens) < 2:
+        return None
+
+    best_score = 0.0
+    best_key: str | None = None
+
+    for existing_key in existing_index:
+        existing_tokens = set(existing_key.split())
+        if not existing_tokens or len(existing_tokens) < 2:
+            continue
+
+        intersection = candidate_tokens & existing_tokens
+        if not intersection:
+            continue
+
+        containment = max(
+            len(intersection) / len(candidate_tokens),
+            len(intersection) / len(existing_tokens),
+        )
+        jaccard = len(intersection) / len(candidate_tokens | existing_tokens)
+        score = max(containment, jaccard)
+
+        if score > best_score:
+            best_score = score
+            best_key = existing_key
+
+    if best_score >= threshold and best_key is not None:
+        return existing_index[best_key]
+    return None
+
+
 def canonicalize_concepts(
     concepts: list[str], alias_to_canonical: dict[str, str]
 ) -> list[str]:

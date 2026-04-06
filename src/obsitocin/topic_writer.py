@@ -20,6 +20,7 @@ from pathlib import Path
 from obsitocin.concepts import (
     concept_lookup_key,
     concept_note_stem,
+    find_fuzzy_topic_match,
 )  # concept_note_stem: legacy only
 from obsitocin.config import LOGS_DIR, OBS_DIR
 
@@ -305,6 +306,10 @@ def write_topic_note(
 
     index = _scan_topic_index(project)
     existing_file = index.get(concept_lookup_key(topic))
+    if existing_file is None:
+        existing_file = find_fuzzy_topic_match(topic, index)
+        if existing_file is not None:
+            log(f"[{project}] Fuzzy-matched topic '{topic}' → existing '{existing_file.stem}'")
 
     if existing_file and existing_file.exists():
         existing_content = existing_file.read_text(errors="replace")
@@ -576,10 +581,10 @@ def write_notes_for_qa(qa: dict) -> dict:
         topic_name = entry["name"]
         knowledge = entry.get("knowledge", [])
         topic_key = concept_lookup_key(topic_name)
-        if (
-            importance < TOPIC_PROMOTION_IMPORTANCE_MIN
-            and topic_key not in existing_index
-        ):
+        fuzzy_hit = topic_key in existing_index or find_fuzzy_topic_match(
+            topic_name, existing_index
+        ) is not None
+        if importance < TOPIC_PROMOTION_IMPORTANCE_MIN and not fuzzy_hit:
             log(
                 f"[{project}] Skipped low-signal new topic: {topic_name} "
                 f"(importance={importance})"
