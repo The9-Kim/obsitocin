@@ -172,10 +172,18 @@ def _find_qwen_model() -> Path:
             )
         return model_path
 
+    # Search in project models directory
     models_dir = DATA_DIR / "models"
     if models_dir.exists():
         for gguf in models_dir.rglob("*Q4_K_M*.gguf"):
             return gguf
+
+    # Search in huggingface cache
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+    if hf_cache.exists():
+        for gguf in hf_cache.rglob("*Q4_K_M*.gguf"):
+            return gguf
+
     return Path("")
 
 
