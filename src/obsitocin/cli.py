@@ -745,7 +745,11 @@ def build_parser() -> argparse.ArgumentParser:
         "init",
         help="Initialize config, create directories, and register Claude Code hooks.",
     )
-    init_parser.add_argument("--vault-dir", required=True)
+    init_parser.add_argument(
+        "--vault-dir",
+        default="~/Documents/Obsitocin",
+        help="Path to Obsidian vault (default: ~/Documents/Obsitocin).",
+    )
     init_parser.add_argument(
         "--llm-provider",
         choices=["codex", "claude", "gemini", "qwen"],
