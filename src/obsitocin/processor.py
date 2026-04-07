@@ -120,6 +120,28 @@ def get_pending_files() -> list[Path]:
     return files
 
 
+def _process_tool_block(
+    name: str,
+    inp: dict,
+    files_modified: list[str],
+    files_seen: set[str],
+    commands_executed: list[str],
+    tool_counts: dict[str, int],
+) -> None:
+    """Process a single tool use entry for tool summary."""
+    tool_counts[name] = tool_counts.get(name, 0) + 1
+
+    if name in ("Write", "Edit", "write", "edit"):
+        fpath = inp.get("file_path", "")
+        if fpath and fpath not in files_seen and len(files_modified) < 30:
+            files_seen.add(fpath)
+            files_modified.append(fpath)
+    elif name in ("Bash", "bash"):
+        cmd = inp.get("command", "")
+        if cmd and len(commands_executed) < 20:
+            commands_executed.append(cmd[:120])
+
+
 def extract_tool_summary(transcript_path: str) -> dict:
     if not transcript_path:
         return {}
@@ -140,35 +162,47 @@ def extract_tool_summary(transcript_path: str) -> dict:
                 except json.JSONDecodeError:
                     continue
 
+                # New flat format: {type: "tool_use", tool_name: ..., tool_input: ...}
+                if entry.get("type") == "tool_use" and "tool_name" in entry:
+                    name = entry.get("tool_name", "")
+                    inp = entry.get("tool_input", {})
+                    _process_tool_block(
+                        name, inp, files_modified, files_seen,
+                        commands_executed, tool_counts,
+                    )
+                    continue
+
+                # Rich format: {type: "assistant", message: {content: [...]}}
+                if entry.get("type") == "assistant":
+                    msg = entry.get("message", {})
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                name = block.get("name", "")
+                                inp = block.get("input", {})
+                                _process_tool_block(
+                                    name, inp, files_modified, files_seen,
+                                    commands_executed, tool_counts,
+                                )
+                    continue
+
+                # Legacy format: {message: {role: "assistant", content: [...]}}
                 msg = entry.get("message", entry)
                 if msg.get("role") != "assistant":
                     continue
-
                 content = msg.get("content", [])
                 if not isinstance(content, list):
                     continue
-
                 for block in content:
                     if not isinstance(block, dict) or block.get("type") != "tool_use":
                         continue
-
                     name = block.get("name", "")
                     inp = block.get("input", {})
-                    tool_counts[name] = tool_counts.get(name, 0) + 1
-
-                    if name in ("Write", "Edit"):
-                        fpath = inp.get("file_path", "")
-                        if (
-                            fpath
-                            and fpath not in files_seen
-                            and len(files_modified) < 30
-                        ):
-                            files_seen.add(fpath)
-                            files_modified.append(fpath)
-                    elif name == "Bash":
-                        cmd = inp.get("command", "")
-                        if cmd and len(commands_executed) < 20:
-                            commands_executed.append(cmd[:120])
+                    _process_tool_block(
+                        name, inp, files_modified, files_seen,
+                        commands_executed, tool_counts,
+                    )
 
         if not tool_counts:
             return {}
@@ -857,7 +891,7 @@ def process_file(
 
     if not has_content:
         log(f"{empty_reason}: {filepath.name}, skipping")
-        filepath.unlink()
+        filepath.unlink(missing_ok=True)
         return True
 
     content_hash = ensure_content_hash(qa)
@@ -869,7 +903,7 @@ def process_file(
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
         out_file = PROCESSED_DIR / filepath.name
         out_file.write_text(json.dumps(qa, ensure_ascii=False, indent=2))
-        filepath.unlink()
+        filepath.unlink(missing_ok=True)
         log(f"Duplicate skipped: {filepath.name} → {duplicate[0].name}")
         return True
 
@@ -891,7 +925,7 @@ def process_file(
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
         out_file = PROCESSED_DIR / filepath.name
         out_file.write_text(json.dumps(qa, ensure_ascii=False, indent=2))
-        filepath.unlink()
+        filepath.unlink(missing_ok=True)
         log(f"PII-sensitive entry skipped: {filepath.name}")
         return True
 
@@ -925,7 +959,7 @@ def process_file(
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
         out_file = PROCESSED_DIR / filepath.name
         out_file.write_text(json.dumps(qa, ensure_ascii=False, indent=2))
-        filepath.unlink()
+        filepath.unlink(missing_ok=True)
         log(f"Filtered (not worth storing): {filepath.name}")
         return True
 
@@ -935,7 +969,7 @@ def process_file(
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     out_file = PROCESSED_DIR / filepath.name
     out_file.write_text(json.dumps(qa, ensure_ascii=False, indent=2))
-    filepath.unlink()
+    filepath.unlink(missing_ok=True)
     log(f"Processed: {filepath.name} → {out_file.name}")
 
     try:

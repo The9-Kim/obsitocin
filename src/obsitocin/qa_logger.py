@@ -101,7 +101,16 @@ MAX_WRITE_CONTENT_CHARS = 2000  # Max chars of Write content to inline
 
 
 def _is_user_prompt(msg: dict) -> bool:
-    """Check if a message is a user prompt (not a tool_result)."""
+    """Check if a message is a user prompt (not a tool_result).
+
+    Supports both legacy format ({role: "user", content: ...}) and
+    new flat format ({type: "user", content: "..."}).
+    """
+    # New flat format: {type: "user", content: "..."}
+    if msg.get("type") == "user" and "role" not in msg:
+        content = msg.get("content", "")
+        return isinstance(content, str) and bool(content.strip())
+    # Legacy format: {role: "user", content: ...}
     if msg.get("role") != "user":
         return False
     content = msg.get("content", "")
@@ -145,50 +154,177 @@ def _extract_assistant_parts(msg: dict) -> list[str]:
     return parts
 
 
+def _extract_response_from_rich_transcript(entries: list[dict]) -> str:
+    """Extract response from rich transcript (project-specific, has type: assistant)."""
+    last_prompt_idx = -1
+    for i, entry in enumerate(entries):
+        if entry.get("type") == "assistant":
+            msg = entry.get("message", {})
+            if _is_user_prompt(msg):
+                last_prompt_idx = i
+        else:
+            msg = entry.get("message", entry)
+            if _is_user_prompt(msg):
+                last_prompt_idx = i
+
+    if last_prompt_idx < 0:
+        return ""
+
+    parts: list[str] = []
+    for entry in entries[last_prompt_idx + 1 :]:
+        if entry.get("type") == "assistant":
+            msg = entry.get("message", {})
+            if msg.get("role") == "assistant":
+                parts.extend(_extract_assistant_parts(msg))
+        else:
+            msg = entry.get("message", entry)
+            if msg.get("role") == "assistant":
+                parts.extend(_extract_assistant_parts(msg))
+
+    return "\n\n".join(parts) if parts else ""
+
+
+def _extract_response_from_flat_transcript(entries: list[dict]) -> str:
+    """Extract response from flat/simplified transcript (tool_use/tool_result only).
+
+    Reconstructs the assistant response from tool actions when there are
+    no explicit assistant text entries.
+    """
+    # Find the last user prompt
+    last_prompt_idx = -1
+    for i, entry in enumerate(entries):
+        if entry.get("type") == "user" and "role" not in entry:
+            content = entry.get("content", "")
+            if isinstance(content, str) and content.strip():
+                last_prompt_idx = i
+
+    if last_prompt_idx < 0:
+        return ""
+
+    parts: list[str] = []
+    for entry in entries[last_prompt_idx + 1 :]:
+        etype = entry.get("type", "")
+
+        if etype == "tool_use":
+            tool_name = entry.get("tool_name", "")
+            tool_input = entry.get("tool_input", {})
+
+            if tool_name.lower() == "write":
+                fpath = tool_input.get("file_path", "")
+                code = tool_input.get("content", "")
+                if fpath and code:
+                    truncated = code[:MAX_WRITE_CONTENT_CHARS]
+                    if len(code) > MAX_WRITE_CONTENT_CHARS:
+                        truncated += "\n... (truncated)"
+                    parts.append(f"[Created file: {fpath}]\n```\n{truncated}\n```")
+            elif tool_name.lower() == "edit":
+                fpath = tool_input.get("file_path", "")
+                old_s = tool_input.get("old_string", "")
+                new_s = tool_input.get("new_string", "")
+                if fpath:
+                    parts.append(f"[Edited: {fpath}] {old_s[:60]}→{new_s[:60]}")
+
+        elif etype == "tool_result":
+            tool_name = entry.get("tool_name", "")
+            output = entry.get("tool_output", {})
+            if isinstance(output, dict):
+                out_text = output.get("output", "")
+            elif isinstance(output, str):
+                out_text = output
+            else:
+                out_text = ""
+            # Include meaningful bash output and text results
+            if tool_name.lower() == "bash" and out_text.strip():
+                parts.append(f"[bash output] {out_text[:500]}")
+
+    return "\n\n".join(parts) if parts else ""
+
+
 def extract_full_response(transcript_path: str) -> str:
     """Extract assistant response for the last turn from transcript JSONL.
 
-    Finds the last user prompt message (not tool_result), then collects
-    all assistant text blocks and Write tool content after it.
+    Supports three transcript formats:
+    1. Legacy: {message: {role: "assistant", content: [...]}}
+    2. Rich/project: {type: "assistant", message: {role: "assistant", ...}}
+    3. Flat/simplified: {type: "tool_use"}, {type: "tool_result"} (no assistant text)
     """
     if not transcript_path:
         return ""
     try:
-        # Read all entries
         entries: list[dict] = []
         with open(transcript_path, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                entries.append(json.loads(line))
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
 
-        # Find the index of the last user prompt
-        last_prompt_idx = -1
-        for i, entry in enumerate(entries):
-            msg = entry.get("message", entry)
-            if _is_user_prompt(msg):
-                last_prompt_idx = i
-
-        if last_prompt_idx < 0:
+        if not entries:
             return ""
 
-        # Collect assistant parts after the last user prompt
-        parts: list[str] = []
-        for entry in entries[last_prompt_idx + 1 :]:
-            msg = entry.get("message", entry)
-            if msg.get("role") == "assistant":
-                parts.extend(_extract_assistant_parts(msg))
+        # Detect format by checking entry types
+        has_assistant_type = any(e.get("type") == "assistant" for e in entries)
+        has_role_field = any(
+            e.get("message", e).get("role") in ("user", "assistant") for e in entries
+        )
+        has_flat_types = any(
+            e.get("type") in ("tool_use", "tool_result") and "message" not in e
+            for e in entries
+        )
 
-        return "\n\n".join(parts) if parts else ""
+        # Try rich format first (has type: "assistant" with message wrapper)
+        if has_assistant_type:
+            result = _extract_response_from_rich_transcript(entries)
+            if result:
+                return result
+
+        # Try legacy format (has role field in message or entry)
+        if has_role_field and not has_flat_types:
+            last_prompt_idx = -1
+            for i, entry in enumerate(entries):
+                msg = entry.get("message", entry)
+                if _is_user_prompt(msg):
+                    last_prompt_idx = i
+
+            if last_prompt_idx >= 0:
+                parts: list[str] = []
+                for entry in entries[last_prompt_idx + 1 :]:
+                    msg = entry.get("message", entry)
+                    if msg.get("role") == "assistant":
+                        parts.extend(_extract_assistant_parts(msg))
+                if parts:
+                    return "\n\n".join(parts)
+
+        # Flat/simplified format: reconstruct from tool actions
+        if has_flat_types:
+            result = _extract_response_from_flat_transcript(entries)
+            if result:
+                return result
+
+        return ""
     except Exception as e:
         log(f"Failed to read transcript: {e}")
         return ""
 
 
-def _resolve_transcript_path(session_id: str, hint: str = "") -> str:
+def _resolve_transcript_path(session_id: str, hint: str = "", cwd: str = "") -> str:
+    """Resolve transcript path, checking project-specific dirs first (richer format)."""
     if hint and Path(hint).exists():
         return hint
+
+    # Check project-specific transcript (has assistant text entries)
+    if cwd:
+        encoded_cwd = cwd.replace("/", "-")
+        project_candidate = (
+            Path.home() / ".claude" / "projects" / encoded_cwd / f"{session_id}.jsonl"
+        )
+        if project_candidate.exists():
+            return str(project_candidate)
+
+    # Fallback: global transcripts dir (simplified format, no assistant text)
     candidate = Path.home() / ".claude" / "transcripts" / f"{session_id}.jsonl"
     if candidate.exists():
         return str(candidate)
@@ -206,14 +342,14 @@ def handle_stop(data: dict) -> None:
         return
 
     raw_transcript_path = data.get("transcript_path", "")
-    transcript_path = _resolve_transcript_path(session_id, raw_transcript_path)
+    cwd = data.get("cwd", "")
+    transcript_path = _resolve_transcript_path(session_id, raw_transcript_path, cwd)
     if transcript_path and not raw_transcript_path:
         log(f"Resolved transcript via fallback: {transcript_path}")
 
     response = extract_full_response(transcript_path)
     if not response:
         response = data.get("last_assistant_message", "")
-    cwd = data.get("cwd", "")
     timestamp = datetime.now().isoformat()
 
     prompt_file = QUEUE_DIR / f"{session_id}_prompt.json"
