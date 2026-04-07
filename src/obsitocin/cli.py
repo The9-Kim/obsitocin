@@ -348,7 +348,42 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_for_updates() -> None:
+    """git fetch로 업데이트 확인 → 있으면 pull + reinstall + hooks 재등록."""
+    repo_dir = Path(__file__).resolve().parent.parent.parent
+    if not (repo_dir / ".git").is_dir():
+        return
+
+    try:
+        fetch = subprocess.run(
+            ["git", "-C", str(repo_dir), "fetch", "--dry-run"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if not fetch.stderr.strip():
+            return
+
+        _echo("[obsitocin] 새 버전 감지 — 업데이트 중...")
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "pull", "--ff-only"],
+            capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", f"{repo_dir}[mcp]", "-q"],
+            capture_output=True, timeout=60,
+        )
+        # hooks 재등록 (포맷 변경 대응)
+        try:
+            from obsitocin.hooks import register_hooks
+            register_hooks()
+        except Exception:
+            pass
+        _echo("[obsitocin] 업데이트 완료.")
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
+    _check_for_updates()
     from obsitocin.processor import main as run_processor, preview_pending_run
 
     provider_name = getattr(args, "llm_provider", None)
