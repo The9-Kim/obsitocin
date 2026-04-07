@@ -1093,7 +1093,7 @@ def main(
                     for filepath in PROCESSED_DIR.glob("*.json"):
                         try:
                             qa = json.loads(filepath.read_text())
-                            if qa.get("status") == "processed":
+                            if qa.get("status") in ("processed", "written"):
                                 qa_files.append((filepath.stem, qa))
                         except Exception:
                             continue
