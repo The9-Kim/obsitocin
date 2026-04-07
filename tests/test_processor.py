@@ -250,7 +250,7 @@ class TestProcessFileLegacyCompat(unittest.TestCase):
 
         self.assertTrue(result)
         processed = self._read_processed("legacy.json")
-        self.assertEqual(processed["status"], "processed")
+        self.assertIn(processed["status"], ("processed", "written"))
         self.assertEqual(processed["source_type"], "claude_code")
         self.assertEqual(processed["content_hash"], "abc123def456abcd")
 

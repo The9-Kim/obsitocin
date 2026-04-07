@@ -425,7 +425,7 @@ class PipelineSafetyTests(unittest.TestCase):
             self.assertTrue(ok)
             written = json.loads((processed_dir / "item.json").read_text())
             self.assertTrue(written["tagging_fallback"])
-            self.assertEqual(written["status"], "processed")
+            self.assertIn(written["status"], ("processed", "written"))
             self.assertIn("developer-qna", written["tagging_result"]["tags"])
 
     def test_process_file_marks_duplicates_by_content_hash(self) -> None:

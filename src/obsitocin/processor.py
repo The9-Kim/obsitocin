@@ -207,6 +207,83 @@ def _build_tool_context(tool_summary: dict | None) -> str:
     return ctx[:MAX_TOOL_CONTEXT_CHARS]
 
 
+MAX_MCP_CONTEXT_CHARS = 1500
+
+
+def _extract_mcp_context(transcript_path: str) -> str:
+    """Extract brief text summaries from MCP tool results in transcript."""
+    if not transcript_path:
+        return ""
+    try:
+        mcp_tool_ids: dict[str, str] = {}  # id -> short tool name
+        snippets: list[str] = []
+
+        with open(transcript_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = entry.get("message", entry)
+                role = msg.get("role")
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+
+                if role == "assistant":
+                    for block in content:
+                        if (
+                            isinstance(block, dict)
+                            and block.get("type") == "tool_use"
+                            and block.get("name", "").startswith("mcp__")
+                        ):
+                            tool_id = block.get("id", "")
+                            name = block.get("name", "")
+                            short = name.split("__")[-1] if "__" in name else name
+                            if tool_id:
+                                mcp_tool_ids[tool_id] = short
+
+                elif role == "user" and mcp_tool_ids:
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") != "tool_result":
+                            continue
+                        tid = block.get("tool_use_id", "")
+                        if tid not in mcp_tool_ids:
+                            continue
+
+                        short_name = mcp_tool_ids.pop(tid)
+                        rc = block.get("content", "")
+                        if isinstance(rc, list):
+                            rc = " ".join(
+                                b.get("text", "")
+                                for b in rc
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
+                        if isinstance(rc, str) and rc.strip():
+                            snippet = rc.strip()[:300]
+                            if len(rc.strip()) > 300:
+                                snippet += "..."
+                            snippets.append(f"[{short_name}] {snippet}")
+
+                        if len(snippets) >= 5:
+                            break
+                if len(snippets) >= 5:
+                    break
+
+        if not snippets:
+            return ""
+        ctx = "\n\n외부 도구 결과 요약:\n" + "\n".join(snippets)
+        return ctx[:MAX_MCP_CONTEXT_CHARS]
+    except Exception:
+        return ""
+
+
 def _scan_existing_topics(cwd: str) -> list[str]:
     from obsitocin.config import OBS_DIR
 
@@ -252,13 +329,14 @@ def _build_qa_tagging_prompt(qa: dict, tool_summary: dict | None = None) -> str:
     prompt_text = qa.get("prompt", "")[:MAX_PROMPT_CHARS]
     response_text = qa.get("response", "")[:MAX_RESPONSE_CHARS]
     tool_context = _build_tool_context(tool_summary)
+    mcp_context = _extract_mcp_context(qa.get("transcript_path", ""))
     existing_context = _build_existing_topics_context(qa.get("cwd", ""))
 
     return f"""다음 대화를 분석하고 JSON으로만 응답하세요.
 
 질문: {prompt_text}
 
-답변: {response_text}{tool_context}
+답변: {response_text}{tool_context}{mcp_context}
 
 JSON 구조:
 {{
@@ -865,6 +943,8 @@ def process_file(
 
         result = write_notes_for_qa(qa)
         log(f"Topic writer: {result.get('topics_written', 0)} topic(s) written")
+        qa["status"] = "written"
+        out_file.write_text(json.dumps(qa, ensure_ascii=False, indent=2))
     except Exception as e:
         log(f"Topic writer failed (non-fatal): {e}")
 
