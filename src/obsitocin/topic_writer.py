@@ -549,11 +549,16 @@ def write_notes_for_qa(qa: dict) -> dict:
 
     tagging = qa.get("tagging_result", {})
     raw_topics = tagging.get("topics") or []
+    _EMPTY_TITLES = {"untitled", "제목 없음", ""}
     work_summary = (
         tagging.get("work_summary")
         or tagging.get("summary", "")
-        or tagging.get("title", "")
+        or ""
     )
+    if not work_summary:
+        title = (tagging.get("title") or "").strip()
+        if title.lower() not in _EMPTY_TITLES:
+            work_summary = title
     tags = tagging.get("tags", [])
     importance = tagging.get("importance", 3)
     timestamp = qa.get("timestamp", "")
