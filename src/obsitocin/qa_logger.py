@@ -95,8 +95,6 @@ def _transcript_contains_internal_queue_operation(transcript_path: str) -> bool:
             for line in f:
                 if '"type":"queue-operation"' in line or '"type": "queue-operation"' in line:
                     return True
-                if INTERNAL_PROMPT_MARKERS[0] in line:
-                    return True
     except OSError:
         return False
     return False
