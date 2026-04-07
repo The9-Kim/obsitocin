@@ -172,7 +172,7 @@ class TestTopicPromotionThreshold(unittest.TestCase):
                     ],
                     "work_summary": "가벼운 메모 기록",
                     "tags": ["test"],
-                    "importance": 3,
+                    "importance": 2,
                 },
             }
 
