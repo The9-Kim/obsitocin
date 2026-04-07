@@ -63,6 +63,45 @@ def _strip_system_noise(text: str) -> str:
     return text.strip()
 
 
+INTERNAL_PROMPT_MARKERS = (
+    "You are a knowledge extraction engine for a work knowledge base.",
+    "다음 대화를 분석하고 JSON으로만 응답하세요.",
+)
+
+INTERNAL_RESPONSE_MARKERS = (
+    "<task-notification>",
+    "Background command",
+    "Run processor again",
+)
+
+
+def _contains_internal_obsitocin_prompt(text: str) -> bool:
+    if not text:
+        return False
+    return all(marker in text for marker in INTERNAL_PROMPT_MARKERS)
+
+
+def _contains_internal_obsitocin_response(text: str) -> bool:
+    if not text:
+        return False
+    return any(marker in text for marker in INTERNAL_RESPONSE_MARKERS)
+
+
+def _transcript_contains_internal_queue_operation(transcript_path: str) -> bool:
+    if not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"type":"queue-operation"' in line or '"type": "queue-operation"' in line:
+                    return True
+                if INTERNAL_PROMPT_MARKERS[0] in line:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def handle_prompt_submit(data: dict) -> None:
     """Save prompt to a temporary file keyed by session_id."""
     session_id = data.get("session_id", "unknown")
@@ -72,6 +111,10 @@ def handle_prompt_submit(data: dict) -> None:
 
     if not prompt.strip():
         log(f"Empty prompt from session {session_id}, skipping")
+        return
+
+    if _contains_internal_obsitocin_prompt(prompt):
+        log(f"Internal obsitocin prompt for session {session_id}, skipping")
         return
 
     prompt_file = QUEUE_DIR / f"{session_id}_prompt.json"
@@ -354,6 +397,14 @@ def handle_stop(data: dict) -> None:
 
     prompt_file = QUEUE_DIR / f"{session_id}_prompt.json"
 
+    if (
+        _contains_internal_obsitocin_response(response)
+        or _transcript_contains_internal_queue_operation(transcript_path)
+    ):
+        log(f"Internal obsitocin stop event for session {session_id}, skipping")
+        prompt_file.unlink(missing_ok=True)
+        return
+
     if not prompt_file.exists():
         log(f"No prompt file for session {session_id}, saving response-only")
         qa_entry = {
@@ -392,6 +443,10 @@ def handle_stop(data: dict) -> None:
 
     # Take the last prompt entry
     last_prompt = prompts[-1]
+    if _contains_internal_obsitocin_prompt(last_prompt.get("prompt", "")):
+        log(f"Internal obsitocin prompt file for session {session_id}, skipping")
+        prompt_file.unlink(missing_ok=True)
+        return
 
     # Create the Q&A pair
     qa_entry = {

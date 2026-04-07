@@ -126,6 +126,48 @@ class TestQaLoggerOutputFormat(unittest.TestCase):
 
         self.assertIn("transcript_path", qa["source_metadata"])
 
+    def test_handle_prompt_submit_skips_internal_obsitocin_prompt(self):
+        import obsitocin.qa_logger as qa_logger_module
+
+        event = {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "internal-prompt",
+            "cwd": "/tmp/project",
+            "prompt": (
+                "You are a knowledge extraction engine for a work knowledge base.\n\n"
+                "다음 대화를 분석하고 JSON으로만 응답하세요."
+            ),
+        }
+
+        with mock.patch.object(qa_logger_module, "QUEUE_DIR", self.queue_dir):
+            qa_logger_module.handle_prompt_submit(event)
+
+        self.assertEqual(list(self.queue_dir.glob("*.json")), [])
+
+    def test_handle_stop_skips_internal_obsitocin_stop_event(self):
+        import obsitocin.qa_logger as qa_logger_module
+
+        transcript_path = Path(self.tmp) / "internal.jsonl"
+        transcript_path.write_text(
+            '{"type":"queue-operation","content":"You are a knowledge extraction engine for a work knowledge base."}\n'
+        )
+        event = self._create_stop_event("internal-stop")
+        event["transcript_path"] = str(transcript_path)
+        event["last_assistant_message"] = (
+            "<task-notification>Background command \"Run processor again\" completed</task-notification>"
+        )
+
+        with (
+            mock.patch.object(qa_logger_module, "QUEUE_DIR", self.queue_dir),
+            mock.patch.object(qa_logger_module, "trigger_processor"),
+        ):
+            qa_logger_module.handle_stop(event)
+
+        qa_files = [
+            f for f in self.queue_dir.glob("*.json") if not f.stem.endswith("_prompt")
+        ]
+        self.assertEqual(qa_files, [])
+
 
 if __name__ == "__main__":
     unittest.main()
