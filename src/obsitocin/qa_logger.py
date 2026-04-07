@@ -395,10 +395,7 @@ def handle_stop(data: dict) -> None:
 
     prompt_file = QUEUE_DIR / f"{session_id}_prompt.json"
 
-    if (
-        _contains_internal_obsitocin_response(response)
-        or _transcript_contains_internal_queue_operation(transcript_path)
-    ):
+    if _contains_internal_obsitocin_response(response):
         log(f"Internal obsitocin stop event for session {session_id}, skipping")
         prompt_file.unlink(missing_ok=True)
         return
