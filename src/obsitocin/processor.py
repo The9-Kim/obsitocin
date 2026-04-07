@@ -847,8 +847,12 @@ def call_tagging(prompt: str, provider_name: str | None = None) -> dict | None:
 
     try:
         outer = json.loads(content)
-        if isinstance(outer, dict) and isinstance(outer.get("response"), str):
-            content = outer["response"]
+        if isinstance(outer, dict):
+            for key in ("response", "result"):
+                val = outer.get(key)
+                if isinstance(val, str) and val.strip():
+                    content = val
+                    break
     except json.JSONDecodeError:
         pass
 
