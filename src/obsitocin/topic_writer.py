@@ -433,12 +433,106 @@ def update_project_index(project: str) -> Path | None:
 # ── Work log ──
 
 
+def _write_session_raw(
+    qa: dict,
+    project: str,
+    date_str: str,
+    time_str: str,
+    tagging: dict,
+    written_topics: list[str],
+) -> "Path | None":
+    """Write immutable raw session note. Idempotent via content_hash."""
+    if OBS_DIR is None:
+        return None
+
+    session_id = qa.get("session_id", "unknown")
+    content_hash = qa.get("content_hash", "")
+
+    sessions_dir = OBS_DIR / "raw" / "sessions" / date_str
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dedup: check existing files in date directory for same content_hash
+    if content_hash:
+        for existing in sessions_dir.glob("*.md"):
+            try:
+                text = existing.read_text(encoding="utf-8")
+                if f"content_hash: {content_hash}" in text[:500]:
+                    return existing
+            except OSError:
+                continue
+
+    time_safe = time_str.replace(":", "-")
+    sid_short = session_id[:8] if session_id != "unknown" else "no-sid"
+    filename = f"{time_safe}_{sid_short}.md"
+    filepath = sessions_dir / filename
+
+    # Avoid overwriting
+    if filepath.exists():
+        return filepath
+
+    # Build topic wikilinks
+    topic_links = []
+    for t in written_topics:
+        safe = t.replace(" ", "-")
+        topic_links.append(f"[[projects/{project}/topics/{safe}|{t}]]")
+
+    tags_list = tagging.get("tags", [])
+    tags_yaml = "\n".join(f"  - {t}" for t in tags_list) if tags_list else ""
+
+    frontmatter_parts = [
+        "---",
+        f'title: "{tagging.get("title", "Untitled")}"',
+        f"date: {qa.get('timestamp', date_str)}",
+        f"project: {project}",
+        f"session_id: {session_id}",
+        f"content_hash: {content_hash}",
+        f"source_type: {qa.get('source_type', 'claude_code')}",
+        f"importance: {tagging.get('importance', 3)}",
+    ]
+    if tags_yaml:
+        frontmatter_parts.append("tags:")
+        frontmatter_parts.append(tags_yaml)
+    frontmatter_parts.append("type: session-raw")
+    frontmatter_parts.append("---")
+    frontmatter = "\n".join(frontmatter_parts)
+
+    prompt = qa.get("prompt", "(없음)")
+    response = qa.get("response", "(없음)")
+    title = tagging.get("title", "Untitled")
+
+    body_parts = [
+        frontmatter,
+        "",
+        f"# {title}",
+        "",
+        "## 질문",
+        "",
+        prompt,
+        "",
+        "## 응답",
+        "",
+        response,
+    ]
+
+    if topic_links:
+        body_parts.extend([
+            "",
+            "## 메타데이터",
+            "",
+            f"- 관련 주제: {', '.join(topic_links)}",
+        ])
+
+    filepath.write_text("\n".join(body_parts) + "\n", encoding="utf-8")
+    return filepath
+
+
 def append_work_log(
     project: str,
     date_str: str,
     time_str: str,
     work_summary: str,
     topics: list[str],
+    session_raw_path: "Path | None" = None,
 ) -> Path | None:
     daily_dir = _daily_dir()
     if daily_dir is None:
@@ -452,6 +546,10 @@ def append_work_log(
     entry = f"- {time_str} [{project}] {work_summary}"
     if topic_links:
         entry += f" → {topic_links}"
+    if session_raw_path is not None:
+        # Build relative wikilink: raw/sessions/{date}/{filename}
+        rel = f"raw/sessions/{date_str}/{session_raw_path.name}"
+        entry += f" ([[{rel}|원문]])"
 
     if log_file.exists():
         existing = log_file.read_text()
@@ -619,8 +717,17 @@ def write_notes_for_qa(qa: dict) -> dict:
             for ref_project, ref_title in cross_refs:
                 _ensure_cross_link(ref_project, ref_title, project, topic_name)
 
+    # Raw session preservation (non-blocking)
+    session_raw_path = None
+    try:
+        session_raw_path = _write_session_raw(
+            qa, project, date_str, time_str, tagging, written_topics
+        )
+    except Exception:
+        pass
+
     if work_summary:
-        append_work_log(project, date_str, time_str, work_summary, written_topics)
+        append_work_log(project, date_str, time_str, work_summary, written_topics, session_raw_path=session_raw_path)
 
     update_project_index(project)
     update_moc()

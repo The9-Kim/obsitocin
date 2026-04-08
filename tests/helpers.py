@@ -91,6 +91,7 @@ def create_test_vault(tmp_dir: str) -> str:
     topics_dir.mkdir(parents=True, exist_ok=True)
     daily_dir = vault_root / "daily"
     daily_dir.mkdir(parents=True, exist_ok=True)
+    (vault_root / "raw" / "sessions").mkdir(parents=True, exist_ok=True)
 
     # Topic notes
     (topics_dir / "Docker.md").write_text(DOCKER_TOPIC_CONTENT)

@@ -21,6 +21,7 @@ from obsitocin.config import (
     LOGS_DIR,
     MAX_PROMPT_CHARS,
     MAX_RESPONSE_CHARS,
+    SEARCH_DB_PATH,
 )
 
 LOG_FILE = LOGS_DIR / "embeddings.log"
@@ -271,7 +272,117 @@ def embed_topic_notes(vault_dir: Path) -> int:
 
     index["entries"] = entries
     save_index(index)
+
+    # Dual-write topic notes to SQLite search.db
+    _sync_topics_to_db(to_embed, embeddings)
+
     return updated
+
+
+def _sync_qas_to_db(
+    to_embed: list[tuple[str, dict, str]],
+    embeddings: list[list[float]],
+) -> None:
+    """Write Q&A entries + chunks + embeddings to SQLite (non-blocking)."""
+    try:
+        from obsitocin.chunker import chunks_for_qa
+        from obsitocin.search_db import (
+            ensure_schema,
+            get_connection,
+            store_chunk_embeddings,
+            upsert_chunks,
+            upsert_qa_entry,
+        )
+
+        conn = get_connection(SEARCH_DB_PATH)
+        ensure_schema(conn)
+
+        for i, (file_id, qa, embed_text) in enumerate(to_embed):
+            if i >= len(embeddings) or not embeddings[i]:
+                continue
+            tagging = qa.get("tagging_result", {})
+            metadata = {
+                "title": tagging.get("title", ""),
+                "work_summary": tagging.get("work_summary") or tagging.get("summary", ""),
+                "category": tagging.get("category", "other"),
+                "importance": tagging.get("importance", 3),
+                "memory_type": tagging.get("memory_type", "dynamic"),
+                "tags": tagging.get("tags", []),
+                "key_concepts": tagging.get("key_concepts", []),
+                "project": Path(qa.get("cwd", "")).name if qa.get("cwd") else "",
+                "timestamp": qa.get("timestamp", ""),
+                "content_hash": qa.get("content_hash", ""),
+                "source_type": qa.get("source_type", "qa"),
+                "full_text": embed_text,
+            }
+            upsert_qa_entry(conn, file_id, metadata)
+
+            text_chunks = chunks_for_qa(qa)
+            chunk_dicts = [
+                {"chunk_index": ci, "chunk_text": ct, "text_hash": text_hash(ct)}
+                for ci, ct in enumerate(text_chunks)
+            ]
+            chunk_ids = upsert_chunks(conn, file_id, chunk_dicts)
+
+            # Store embedding for first chunk; rest would need separate embed calls
+            if chunk_ids:
+                store_chunk_embeddings(conn, [(chunk_ids[0], embeddings[i])])
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"SQLite dual-write (QAs) failed (non-fatal): {e}")
+
+
+def _sync_topics_to_db(
+    to_embed: list[tuple[str, str]],
+    embeddings: list[list[float]],
+) -> None:
+    """Write topic note entries + embeddings to SQLite (non-blocking)."""
+    try:
+        from obsitocin.search_db import (
+            ensure_schema,
+            get_connection,
+            store_chunk_embeddings,
+            upsert_chunks,
+            upsert_qa_entry,
+        )
+
+        conn = get_connection(SEARCH_DB_PATH)
+        ensure_schema(conn)
+
+        for i, (key, embed_text) in enumerate(to_embed):
+            if i >= len(embeddings) or not embeddings[i]:
+                continue
+            parts = key.split(":", 2)
+            project = parts[1] if len(parts) > 1 else ""
+            title = parts[2] if len(parts) > 2 else key
+
+            metadata = {
+                "title": title,
+                "work_summary": f"주제 노트: {title}",
+                "category": "other",
+                "importance": 4,
+                "memory_type": "static",
+                "tags": [],
+                "key_concepts": [title],
+                "project": project,
+                "source_type": "topic_note",
+                "full_text": embed_text,
+            }
+            upsert_qa_entry(conn, key, metadata)
+
+            chunk_dicts = [
+                {"chunk_index": 0, "chunk_text": embed_text, "text_hash": text_hash(embed_text)}
+            ]
+            chunk_ids = upsert_chunks(conn, key, chunk_dicts)
+            if chunk_ids:
+                store_chunk_embeddings(conn, [(chunk_ids[0], embeddings[i])])
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"SQLite dual-write (topics) failed (non-fatal): {e}")
 
 
 def load_index() -> dict:
@@ -337,4 +448,11 @@ def build_embeddings_for_qas(qa_files: list[tuple[str, dict]]) -> int:
     )
     index["entries"] = entries
     save_index(index)
+
+    # Dual-write to SQLite search.db
+    _sync_qas_to_db(
+        [(file_id, qa, embed_text) for file_id, qa, embed_text in to_embed],
+        embeddings,
+    )
+
     return updated

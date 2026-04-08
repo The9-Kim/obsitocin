@@ -7,7 +7,7 @@ from datetime import datetime
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
-from helpers import create_test_vault
+from helpers import create_test_vault, make_processed_qa
 
 
 class TestUpdateMocSummaries(unittest.TestCase):
@@ -252,3 +252,102 @@ importance: 4
             self.assertEqual(result["topics_written"], 1)
             updated = existing_file.read_text()
             self.assertIn("추가 지식", updated)
+
+
+class TestSessionRawPreservation(unittest.TestCase):
+    def _make_vault(self, tmp: str) -> Path:
+        vault_dir = Path(tmp) / "obsitocin"
+        (vault_dir / "raw" / "sessions").mkdir(parents=True, exist_ok=True)
+        (vault_dir / "projects" / "test-project" / "topics").mkdir(parents=True, exist_ok=True)
+        (vault_dir / "daily").mkdir(parents=True, exist_ok=True)
+        return vault_dir
+
+    def test_write_notes_creates_session_raw(self):
+        """write_notes_for_qa creates a file under raw/sessions/."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa()
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+
+            date_str = "2026-04-05"
+            sessions_dir = vault_dir / "raw" / "sessions" / date_str
+            files = list(sessions_dir.glob("*.md"))
+            self.assertEqual(len(files), 1, f"Expected 1 session raw file, got {files}")
+
+    def test_session_raw_idempotent(self):
+        """Calling write_notes_for_qa twice with same content_hash produces only one file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa()
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+                write_notes_for_qa(qa)
+
+            date_str = "2026-04-05"
+            sessions_dir = vault_dir / "raw" / "sessions" / date_str
+            files = list(sessions_dir.glob("*.md"))
+            self.assertEqual(len(files), 1, f"Expected 1 file after 2 calls, got {files}")
+
+    def test_session_raw_frontmatter(self):
+        """Session raw file contains expected frontmatter fields."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa()
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+
+            date_str = "2026-04-05"
+            sessions_dir = vault_dir / "raw" / "sessions" / date_str
+            raw_file = next(sessions_dir.glob("*.md"))
+            content = raw_file.read_text(encoding="utf-8")
+
+            self.assertIn("type: session-raw", content)
+            self.assertIn(f"content_hash: {qa['content_hash']}", content)
+            self.assertIn(f"session_id: {qa['session_id']}", content)
+
+    def test_session_raw_preserves_content(self):
+        """Session raw file preserves original prompt and response verbatim."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa()
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+
+            date_str = "2026-04-05"
+            sessions_dir = vault_dir / "raw" / "sessions" / date_str
+            raw_file = next(sessions_dir.glob("*.md"))
+            content = raw_file.read_text(encoding="utf-8")
+
+            self.assertIn(qa["prompt"], content)
+            self.assertIn(qa["response"], content)
+
+    def test_daily_log_links_to_raw(self):
+        """Daily work log entry contains a wikilink to the raw session file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa()
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+
+            date_str = "2026-04-05"
+            log_file = vault_dir / "daily" / f"{date_str}.md"
+            self.assertTrue(log_file.exists(), "Daily log file should exist")
+            log_content = log_file.read_text(encoding="utf-8")
+            self.assertIn("원문", log_content)
+            self.assertIn("raw/sessions/", log_content)

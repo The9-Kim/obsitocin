@@ -7,9 +7,14 @@
 - `processor.py`: `source_type` 분기 태깅 (`claude_code` → Q&A 프롬프트, 기타 → 범용 프롬프트). `compute_content_hash()` 출력 변경 금지 (레거시 호환).
 - `source_adapter.py`: `SourceItem` Protocol + `KNOWN_SOURCE_TYPES` = {claude_code, slack, jira, confluence, git, manual}. 새 소스는 여기 등록.
 - `mcp_server.py`: FastMCP 6개 도구 — search_knowledge, list_topics, read_topic, get_work_log, save_insight, get_project_context. `fastmcp`는 optional dep.
-- `embeddings.py`: Q&A + 주제 노트를 동일 인덱스에 저장. 주제 노트 키: `topic:{project}:{title}`.
-- `memory_query.py`: `topic:*` 엔트리를 `source_type: "topic_note"`로 검색 결과에 포함.
-- `topic_writer.py`: `update_moc()`에서 핵심 지식 첫 bullet → 한줄 요약. `<!-- OBSITOCIN:BEGIN USER NOTES -->` 블록만 보존.
+- `embeddings.py`: Q&A + 주제 노트를 동일 인덱스에 저장. 주제 노트 키: `topic:{project}:{title}`. JSON + SQLite 듀얼 라이트.
+- `search_db.py`: SQLite + FTS5 검색 DB. BM25 키워드 검색 + 벡터 검색. `embeddings.json` 대체/보완. 마이그레이션: `obsitocin migrate`.
+- `hybrid_search.py`: BM25 + 벡터를 RRF(k=60)로 결합. mode: hybrid/bm25/vector.
+- `chunker.py`: 긴 Q&A 텍스트를 3000자 단위 + 15% 오버랩으로 청크 분할. 임베딩 정밀도 향상.
+- `tokenizer.py`: FTS5용 토크나이저. `UnicodeTokenizer`(기본) / `KiwiTokenizer`(한국어 형태소, optional `kiwipiepy`).
+- `memory_query.py`: 듀얼 패스 — `search.db` 있으면 hybrid search, 없으면 기존 JSON brute-force 폴백. `topic:*` 엔트리를 `source_type: "topic_note"`로 포함.
+- `git_sync.py`: Git vault 동기화. pull → process → commit → push. 충돌 자동 해결(생성 파일은 ours, topic은 USER NOTES 병합).
+- `topic_writer.py`: `update_moc()`에서 핵심 지식 첫 bullet → 한줄 요약. `<!-- OBSITOCIN:BEGIN USER NOTES -->` 블록만 보존. 원문 보존: `raw/sessions/YYYY-MM-DD/` 에 immutable session note 저장.
 - `ingest.py`: 수동/외부 소스 수집 진입점. 원문은 `raw/`에 보존하고, 요약은 `projects/<project>/sources/`에 source page로 저장한 뒤 관련 topic note를 갱신.
 - `lint.py`: 깨진 위키링크, 고아 주제, 빈약 노트, MOC 불일치 4가지 점검.
 - `qa_logger.py`: 훅 핸들러. queue JSON에 `source_type: "claude_code"` + `source_metadata` 포함.
@@ -21,9 +26,12 @@
 
 ```
 소스 → 어댑터(source_type) → queue/ → processor(분기) → LLM 태깅 → processed/
-  → embeddings(Q&A+주제노트) → topic_writer → vault/{projects,daily,_MOC.md}
+  → embeddings(Q&A+주제노트) → topic_writer → vault/{projects,daily,raw/sessions,_MOC.md}
+  → search.db(SQLite+FTS5) → hybrid_search(BM25+Vector+RRF)
 
-MCP (obsitocin serve): search_knowledge | list/read_topic | get_work_log | save_insight | get_project_context
+MCP (obsitocin serve): search_knowledge | list/read_topic | get_work_log | save_insight | get_project_context | ask_wiki
+
+obsitocin sync: git pull → process → commit → push (multi-device vault sync)
 ```
 
 `obsitocin ingest`와 MCP `ingest_source`는 동일한 `obsitocin.ingest.ingest_source()`를 호출한다.
@@ -43,6 +51,9 @@ MCP (obsitocin serve): search_knowledge | list/read_topic | get_work_log | save_
 | Qwen 모델 | `OBS_QWEN_MODEL_PATH` | `models/*Q4_K_M*.gguf` 스캔 |
 | Embed 모델 | `OBS_EMBED_MODEL_PATH` | `models/*embed*.gguf` 스캔 |
 | PII | `OBS_PII_ENABLED/REDACT/SKIP_SENSITIVE` | `false` |
+| Tokenizer | `OBS_TOKENIZER` | `unicode` (`kiwi` for Korean) |
+| Git 자동 동기화 | `OBS_GIT_AUTO_SYNC` | `false` |
+| Git Remote | `OBS_GIT_REMOTE` | `origin` |
 
 ## 데이터 모델
 
@@ -57,18 +68,22 @@ Queue JSON: `source_type` (기본 "claude_code") + `source_metadata`. 레거시(
 - **인덱스**: `projects/<p>/_index.md`
 - **로그**: `daily/YYYY-MM-DD.md`
 - **MOC**: `_MOC.md` — 프로젝트별 주제 + 한줄 요약
+- **원문**: `raw/sessions/YYYY-MM-DD/HH-MM-SS_{sid}.md` — immutable Q&A 보존 (type: session-raw, content_hash로 멱등)
 
 ## 개발
 
 ```bash
-pip install -e ".[mcp]"
+pip install -e ".[mcp,korean]"
 .venv/bin/python3 -m unittest discover -s tests -v
+obsitocin migrate  # embeddings.json → search.db 마이그레이션
 ```
 
 ## 설계 원칙
 
 - 정확한 경로 위키링크 (짧은 링크 지양)
 - `compute_content_hash()` 출력 절대 변경 금지
-- `fastmcp`는 optional — core CLI는 zero dependencies
+- `fastmcp`, `kiwipiepy`는 optional — core CLI는 zero dependencies (sqlite3, struct = stdlib)
 - 소스 어댑터는 `typing.Protocol` (ABC 없음, duck typing)
 - OBS_VAULT_DIR 미설정 시 오류 종료
+- MD가 source of truth — search.db는 vault에서 재구축 가능한 파생 캐시
+- search.db 없으면 기존 JSON 경로 그대로 폴백 (하위 호환)

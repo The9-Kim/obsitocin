@@ -28,6 +28,7 @@ dependencies = []
 mcp = ["fastmcp>=2.0"]
 graph = ["networkx", "matplotlib", "numpy"]
 download = ["huggingface-hub"]
+korean = ["kiwipiepy>=0.20.0"]
 
 [project.scripts]
 obsitocin = "obsitocin.cli:main"

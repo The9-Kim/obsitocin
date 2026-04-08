@@ -446,6 +446,22 @@ def _cmd_status(_: argparse.Namespace) -> int:
     _echo(f"Total:     {sum(counts.values())}")
     _echo()
 
+    # SQLite search DB stats
+    from obsitocin.config import SEARCH_DB_PATH
+
+    if SEARCH_DB_PATH.exists():
+        try:
+            from obsitocin.search_db import get_connection, get_db_stats
+            conn = get_connection(SEARCH_DB_PATH)
+            stats = get_db_stats(conn)
+            conn.close()
+            _echo(f"Search DB: {stats['entries']} entries, {stats['chunks']} chunks, {stats['embeddings']} embeddings")
+        except Exception:
+            _echo("Search DB: error reading")
+    else:
+        _echo("Search DB: not created (run 'obsitocin migrate')")
+    _echo()
+
     from obsitocin.hooks import check_hooks
 
     hook_status = check_hooks()
@@ -538,7 +554,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
         else:
             from obsitocin.memory_query import format_results_table, query
 
-            results = query(args.query_text, top_k=args.top_k, filters=filters or None)
+            results = query(args.query_text, top_k=args.top_k, filters=filters or None, mode=getattr(args, "mode", "hybrid"))
             _echo(f'\nResults for: "{args.query_text}"\n')
             _echo(format_results_table(results))
         _report_config_validation()
@@ -636,6 +652,21 @@ def _cmd_embed(_: argparse.Namespace) -> int:
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
+
+
+def _cmd_migrate(_: argparse.Namespace) -> int:
+    from obsitocin.config import EMBEDDINGS_INDEX_PATH, SEARCH_DB_PATH
+    from obsitocin.search_db import migrate_from_json
+
+    _echo("Migrating embeddings.json → search.db ...")
+    result = migrate_from_json(EMBEDDINGS_INDEX_PATH, PROCESSED_DIR, SEARCH_DB_PATH)
+    _echo(f"Migrated {result['entries_migrated']} entries, {result['chunks_created']} chunks.")
+    if result["errors"]:
+        _echo(f"Warnings ({len(result['errors'])}):")
+        for err in result["errors"][:10]:
+            _echo(f"  - {err}")
+    _report_config_validation()
+    return 0
 
 
 def _cmd_organize(args: argparse.Namespace) -> int:
@@ -761,6 +792,40 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sync(args: argparse.Namespace) -> int:
+    from obsitocin.git_sync import sync, SyncStatus
+
+    result = sync(
+        local_only=getattr(args, "local_only", False),
+        dry_run=getattr(args, "dry_run", False),
+    )
+
+    if result.status == SyncStatus.NO_GIT:
+        _echo("Vault directory is not a git repository.")
+        _echo("Initialize with: git -C <vault-dir> init")
+        return 1
+    elif result.status == SyncStatus.NO_REMOTE:
+        _echo("No git remote configured. Use --local-only or add a remote.")
+        return 1
+    elif result.status == SyncStatus.CONFLICT:
+        _echo(f"Merge conflicts in {len(result.conflicts)} file(s):")
+        for f in result.conflicts:
+            _echo(f"  - {f}")
+        _echo("Resolve conflicts manually, then run 'obsitocin sync' again.")
+        return 1
+    elif result.status == SyncStatus.NOTHING_TO_SYNC:
+        _echo("Nothing to sync. Vault is up to date.")
+        return 0
+    elif result.status == SyncStatus.SUCCESS:
+        _echo(f"Synced: {result.files_committed} file(s) committed from {result.hostname}")
+        if result.commit_sha:
+            _echo(f"Commit: {result.commit_sha[:8]}")
+        return 0
+    else:
+        _echo(f"Sync failed: {result.message}")
+        return 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         __import__("fastmcp")
@@ -882,6 +947,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     query_parser.add_argument("--importance-min", type=int)
     query_parser.add_argument("--context", dest="context_mode", action="store_true")
+    query_parser.add_argument(
+        "--mode",
+        choices=["hybrid", "bm25", "vector"],
+        default="hybrid",
+        help="Search mode: hybrid (BM25+vector), bm25 (keyword only), vector (semantic only). Default: hybrid.",
+    )
     query_parser.set_defaults(handler=_cmd_query)
 
     concepts_parser = subparsers.add_parser(
@@ -908,6 +979,12 @@ def build_parser() -> argparse.ArgumentParser:
         "embed", help="Generate semantic embedding vectors for processed Q&A pairs."
     )
     embed_parser.set_defaults(handler=_cmd_embed)
+
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Migrate embeddings.json to SQLite search database.",
+    )
+    migrate_parser.set_defaults(handler=_cmd_migrate)
 
     organize_parser = subparsers.add_parser(
         "organize",
@@ -958,6 +1035,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest_parser.add_argument("--title", help="Override source title.")
     ingest_parser.set_defaults(handler=_cmd_ingest)
+
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Sync vault with git remote: pull, process pending, commit, push.",
+    )
+    sync_parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="Skip git pull/push. Only stage and commit locally.",
+    )
+    sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be committed without making changes.",
+    )
+    sync_parser.set_defaults(handler=_cmd_sync)
 
     uninstall_parser = subparsers.add_parser(
         "uninstall", help="Remove Claude Code hooks and optional local config."

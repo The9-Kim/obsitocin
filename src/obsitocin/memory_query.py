@@ -11,6 +11,7 @@ from pathlib import Path
 from obsitocin.config import (
     PROCESSED_DIR,
     PROFILE_PATH,
+    SEARCH_DB_PATH,
 )
 from obsitocin.concepts import build_concept_catalog, concept_lookup_key
 from obsitocin.embeddings import (
@@ -102,21 +103,112 @@ def _ensure_index(qa_files: list[tuple[str, dict]]) -> dict:
     return index
 
 
-def query(
+def _db_has_entries() -> bool:
+    """Check if search.db exists and has data."""
+    if not SEARCH_DB_PATH.exists():
+        return False
+    try:
+        from obsitocin.search_db import get_connection, get_db_stats
+        conn = get_connection(SEARCH_DB_PATH)
+        stats = get_db_stats(conn)
+        conn.close()
+        return stats.get("entries", 0) > 0
+    except Exception:
+        return False
+
+
+def _query_via_db(
     query_text: str,
-    top_k: int = 5,
-    filters: dict | None = None,
+    top_k: int,
+    filters: dict | None,
+    mode: str,
 ) -> list[dict]:
-    """Semantic search across all accumulated Q&A pairs.
+    """Query using SQLite hybrid search."""
+    from obsitocin.hybrid_search import hybrid_query
 
-    Args:
-        query_text: Natural language query
-        top_k: Number of results to return
-        filters: Optional filters (memory_type, category, importance_min, tags, date_from, date_to)
+    # Generate query embedding if needed
+    query_embedding: list[float] = []
+    if mode in ("hybrid", "vector"):
+        if not is_configured():
+            if mode == "vector":
+                raise RuntimeError(
+                    "Embedding model not configured for vector search."
+                )
+            mode = "bm25"  # fall back to BM25-only
+        else:
+            try:
+                start_embed_server()
+                query_embedding = get_embedding(query_text)
+            except Exception:
+                if mode == "vector":
+                    raise
+                mode = "bm25"
+            finally:
+                if mode == "bm25":
+                    stop_embed_server()
 
-    Returns list of:
-        {file_id, title, summary, similarity, memory_type, importance, concepts, category, date, cwd}
-    """
+    try:
+        results = hybrid_query(
+            SEARCH_DB_PATH,
+            query_text,
+            query_embedding,
+            top_k=top_k,
+            filters=filters,
+            mode=mode,
+        )
+    finally:
+        if query_embedding:
+            stop_embed_server()
+
+    # Normalize to standard result schema
+    normalized = []
+    for r in results:
+        ts = r.get("timestamp", "")
+        try:
+            dt_parsed = datetime.fromisoformat(ts)
+            date_str = dt_parsed.strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            date_str = "—"
+
+        tags = r.get("tags", [])
+        if isinstance(tags, str):
+            import json as _json
+            try:
+                tags = _json.loads(tags)
+            except (ValueError, TypeError):
+                tags = []
+
+        concepts = r.get("key_concepts", [])
+        if isinstance(concepts, str):
+            import json as _json
+            try:
+                concepts = _json.loads(concepts)
+            except (ValueError, TypeError):
+                concepts = []
+
+        normalized.append({
+            "file_id": r.get("file_id", ""),
+            "title": r.get("title", "Untitled"),
+            "work_summary": r.get("work_summary", ""),
+            "distilled_knowledge": [],
+            "similarity": round(r.get("similarity", r.get("rrf_score", 0)), 4),
+            "importance": r.get("importance", 3),
+            "topics": concepts,
+            "category": r.get("category", "other"),
+            "tags": tags,
+            "date": date_str,
+            "project": r.get("project", "uncategorized"),
+            "source_type": r.get("source_type", "qa"),
+        })
+    return normalized
+
+
+def _query_via_json(
+    query_text: str,
+    top_k: int,
+    filters: dict | None,
+) -> list[dict]:
+    """Original brute-force JSON-based query (fallback)."""
     if not is_configured():
         raise RuntimeError(
             "Embedding model not configured. Set OBS_EMBED_MODEL_PATH or place a GGUF embedding model under ~/.local/share/obsitocin/models/."
@@ -132,11 +224,8 @@ def query(
             return []
 
         qa_map = {file_id: qa for file_id, qa in all_qas}
-
-        # Generate query embedding
         query_embedding = get_embedding(query_text)
 
-        # Compute similarities
         scored: list[tuple[str, float, dict]] = []
         for file_id, entry in entries.items():
             embedding = entry.get("embedding", [])
@@ -144,7 +233,6 @@ def query(
                 continue
 
             if file_id.startswith("topic:"):
-                # Topic note entry — create synthetic result
                 parts = file_id.split(":", 2)
                 topic_project = parts[1] if len(parts) > 1 else "unknown"
                 topic_title = parts[2] if len(parts) > 2 else file_id
@@ -184,9 +272,7 @@ def query(
             sim = cosine_similarity(query_embedding, embedding)
             scored.append((file_id, sim, qa))
 
-        # Sort by similarity, return top_k
         scored.sort(key=lambda x: x[1], reverse=True)
-
         MIN_SIMILARITY = 0.5
 
         results = []
@@ -247,6 +333,28 @@ def query(
         return results
     finally:
         stop_embed_server()
+
+
+def query(
+    query_text: str,
+    top_k: int = 5,
+    filters: dict | None = None,
+    mode: str = "hybrid",
+) -> list[dict]:
+    """Search across all accumulated Q&A pairs.
+
+    Args:
+        query_text: Natural language query
+        top_k: Number of results to return
+        filters: Optional filters (memory_type, category, importance_min, tags, date_from, date_to)
+        mode: Search mode — "hybrid" (BM25+vector), "bm25", or "vector"
+
+    Returns list of:
+        {file_id, title, work_summary, similarity, importance, topics, category, tags, date, project}
+    """
+    if _db_has_entries():
+        return _query_via_db(query_text, top_k, filters, mode)
+    return _query_via_json(query_text, top_k, filters)
 
 
 def query_concepts(

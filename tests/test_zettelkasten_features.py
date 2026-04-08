@@ -206,6 +206,7 @@ class QueryConceptTests(unittest.TestCase):
             return 2
 
         with (
+            mock.patch.object(memory_query, "_db_has_entries", return_value=False),
             mock.patch.object(
                 memory_query, "_load_all_written_qas", return_value=qa_entries
             ),
@@ -250,6 +251,7 @@ class QueryConceptTests(unittest.TestCase):
         built = []
 
         with (
+            mock.patch.object(memory_query, "_db_has_entries", return_value=False),
             mock.patch.object(
                 memory_query, "_load_all_written_qas", return_value=qa_entries
             ),

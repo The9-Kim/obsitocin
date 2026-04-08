@@ -181,19 +181,55 @@ def ask_wiki(
             "saved_path": None,
         }
 
-    question_lower = question.lower()
-    scored_topics: list[tuple[int, dict]] = []
-    for topic_info in all_topics:
-        score = 0
-        topic_lower = topic_info["topic"].lower()
-        for word in question_lower.split():
-            if len(word) > 1 and word in topic_lower:
-                score += 3
-        score += topic_info.get("importance", 3)
-        scored_topics.append((score, topic_info))
+    # Use BM25 search if search.db is available, else fallback to substring matching
+    top_topics: list[tuple[int, dict]] = []
+    try:
+        from obsitocin.config import SEARCH_DB_PATH
 
-    scored_topics.sort(key=lambda item: item[0], reverse=True)
-    top_topics = scored_topics[:5]
+        if SEARCH_DB_PATH.exists():
+            from obsitocin.search_db import bm25_search, get_connection, ensure_schema
+
+            conn = get_connection(SEARCH_DB_PATH)
+            ensure_schema(conn)
+            bm25_filters = {"source_type": "topic_note"}
+            if project:
+                bm25_filters["project"] = project
+            fts_results = bm25_search(conn, question, top_k=5, filters=bm25_filters)
+            conn.close()
+            if fts_results:
+                # Map BM25 results back to topic_info format
+                for r in fts_results:
+                    matching = [
+                        t for t in all_topics
+                        if t["topic"] == r.get("title", "") or t.get("project") == r.get("project", "")
+                    ]
+                    if matching:
+                        top_topics.append((r.get("importance", 3), matching[0]))
+                    else:
+                        top_topics.append((r.get("importance", 3), {
+                            "topic": r.get("title", ""),
+                            "project": r.get("project", ""),
+                            "importance": r.get("importance", 3),
+                            "path": f"projects/{r.get('project', '')}/topics/{r.get('title', '')}",
+                        }))
+    except Exception:
+        pass
+
+    if not top_topics:
+        # Fallback: naive substring matching
+        question_lower = question.lower()
+        scored_topics: list[tuple[int, dict]] = []
+        for topic_info in all_topics:
+            score = 0
+            topic_lower = topic_info["topic"].lower()
+            for word in question_lower.split():
+                if len(word) > 1 and word in topic_lower:
+                    score += 3
+            score += topic_info.get("importance", 3)
+            scored_topics.append((score, topic_info))
+
+        scored_topics.sort(key=lambda item: item[0], reverse=True)
+        top_topics = scored_topics[:5]
 
     context_pages: list[str] = []
     source_refs: list[str] = []

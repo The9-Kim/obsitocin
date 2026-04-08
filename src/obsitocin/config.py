@@ -310,6 +310,18 @@ MAX_TOOL_CONTEXT_CHARS = _get_int(
 )
 
 EMBEDDINGS_INDEX_PATH = DATA_DIR / "embeddings.json"
+SEARCH_DB_PATH = DATA_DIR / "search.db"
+
+VALID_TOKENIZERS = ("unicode", "kiwi")
+TOKENIZER = _get("OBS_TOKENIZER", "tokenizer", "unicode").strip().lower()
+if TOKENIZER not in VALID_TOKENIZERS:
+    _add_validation_error(
+        f"Invalid tokenizer {TOKENIZER!r}. Falling back to 'unicode'."
+    )
+    TOKENIZER = "unicode"
+
+GIT_AUTO_SYNC = _get_bool("OBS_GIT_AUTO_SYNC", "git_auto_sync", False)
+GIT_REMOTE = _get("OBS_GIT_REMOTE", "git_remote", "origin").strip()
 
 
 def get_config_validation_errors() -> list[str]:
