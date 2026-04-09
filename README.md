@@ -32,7 +32,7 @@ Claude Code 세션
 
 | 단계        | 범위                                             | 상태               |
 | ----------- | ------------------------------------------------ | ------------------ |
-| **Phase 1** | 개인 / Claude Code (자동 수집 + MCP 서버)        | ✅ 현재            |
+| **Phase 1** | 개인 / Claude Code (자동 수집 + MCP 서버 + 하이브리드 검색 + Git 동기화) | ✅ 현재            |
 | Phase 2     | 멀티플랫폼 (Slack, Jira, Confluence, Git 어댑터) | 아키텍처 준비 완료 |
 | Phase 3     | 팀 지식 베이스 (팀원별 지식 그래프 병합)         | 계획               |
 
@@ -49,7 +49,8 @@ cd obsitocin
 # macOS는 시스템 Python 보호 정책 때문에 venv 필요
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[mcp]"   # MCP 서버 포함 설치 (권장)
+pip install -e ".[mcp]"           # MCP 서버 포함 설치 (권장)
+pip install -e ".[mcp,korean]"    # + 한국어 형태소 분석기 (선택)
 ```
 
 **alias 등록** (매번 activate 없이 사용하려면):
@@ -164,9 +165,19 @@ obsitocin run                          # 수동 파이프라인 실행
 obsitocin run --dry-run                # 미리보기
 obsitocin run --llm-provider claude    # 제공자 오버라이드
 
-# 검색
-obsitocin query "환불 정책"            # 시맨틱 검색 (임베딩 필요)
+# 검색 (업데이트)
+obsitocin query "환불 정책"              # 하이브리드 검색 (BM25 + 벡터)
+obsitocin query "환불 정책" --mode bm25  # 키워드 검색만
+obsitocin query "환불 정책" --mode vector # 벡터 검색만
 obsitocin concepts "venv"              # 주제 단위 집계 검색
+
+# Git 동기화
+obsitocin sync                           # vault Git 동기화 (pull → commit → push)
+obsitocin sync --local-only              # 로컬 커밋만 (push 안 함)
+obsitocin sync --dry-run                 # 미리보기
+
+# 데이터베이스
+obsitocin migrate                        # embeddings.json → SQLite 마이그레이션
 
 # Vault 품질 관리
 obsitocin lint                         # 콘텐츠 점검 (4가지)
@@ -214,6 +225,10 @@ your-vault/obsitocin/
 │       └── topics/
 │           ├── CLI 명령어 설계.md
 │           └── LLM 태깅 프롬프트.md
+├── raw/
+│   └── sessions/
+│       └── 2026-04-05/
+│           └── 17-30-00_a1b2c3d4.md   # 원문 Q&A 보존
 └── daily/
     └── 2026-04-05.md                    # 작업 로그
 ```
@@ -265,7 +280,10 @@ your-vault/obsitocin/
 {
   "vault_dir": "~/Documents/Obsitocin",
   "llm_provider": "claude",
-  "embed_model_path": "/path/to/Qwen3-Embedding-0.6B-Q8_0.gguf"
+  "embed_model_path": "/path/to/Qwen3-Embedding-0.6B-Q8_0.gguf",
+  "tokenizer": "unicode",
+  "git_auto_sync": false,
+  "git_remote": "origin"
 }
 ```
 
@@ -303,10 +321,14 @@ Claude Code 세션 (source_type: claude_code)
   └─ Stop 훅 → qa_logger → queue/{timestamp}_{session}.json
        → processor (source_type 분기: Q&A / 범용)
          → LLM 태깅 → topic_writer → vault
-         → embeddings (Q&A + 주제 노트)
+                     → raw/sessions/ (원문 Q&A 보존)
+         → embeddings (Q&A + 주제 노트) → search.db (SQLite + FTS5)
+         → hybrid_search (BM25 + 벡터 + RRF 결합)
+
+obsitocin sync: git pull → process → commit → push (multi-device vault 동기화)
 
 MCP 서버 (obsitocin serve)
-  ├─ search_knowledge → 임베딩 기반 시맨틱 검색
+  ├─ search_knowledge → 하이브리드 검색 (BM25 + 벡터)
   ├─ list_topics / read_topic → vault 파일시스템 직접 스캔
   ├─ save_insight → topic_writer 직접 호출 (LLM 태깅 스킵)
   └─ get_project_context → 프로젝트 지식 요약 생성

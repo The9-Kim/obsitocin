@@ -25,6 +25,11 @@ user-invocable: true
 
 검색 결과가 없으면 대체 검색어나 더 넓은 쿼리를 제안합니다.
 
+검색 모드:
+- `hybrid` (기본): BM25 키워드 + 벡터 시맨틱 검색을 RRF로 결합
+- `bm25`: 키워드 매칭만 (임베딩 불필요)
+- `vector`: 벡터 유사도만 (임베딩 필요)
+
 ## MCP Server Integration
 
 When the obsitocin MCP server is running (`obsitocin serve`), use native MCP tools instead of CLI:
@@ -36,6 +41,7 @@ When the obsitocin MCP server is running (`obsitocin serve`), use native MCP too
 | Read a topic | `read_topic(project, topic)` | Check vault directly |
 | Get project context | `get_project_context(project)` | Read `_MOC.md` |
 | Save insight | `save_insight(project, topic, knowledge)` | Manual edit |
+| Ask wiki | `ask_wiki(question, project)` | `obsitocin ask "question"` |
 
 ### Session Start Pattern
 
