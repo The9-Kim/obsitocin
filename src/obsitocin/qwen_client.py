@@ -50,9 +50,7 @@ def start_qwen_server() -> subprocess.Popen:
             f"Qwen GGUF model not found: {QWEN_MODEL_PATH}\n\n"
             "Download the model:\n"
             "  pip install huggingface-hub\n"
-            "  hf download unsloth/Qwen3.5-4B-GGUF \\\n"
-            "    --include '*Q4_K_M*' \\\n"
-            "    --local-dir ~/.local/share/obsitocin/models/Qwen3.5-4B-GGUF\n\n"
+            "  hf download unsloth/Qwen3.5-4B-GGUF --include '*Q4_K_M*'\n\n"
             "Or set OBS_QWEN_MODEL_PATH=/path/to/Qwen3.5-4B-Q4_K_M.gguf"
         )
 

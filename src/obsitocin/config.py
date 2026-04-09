@@ -155,9 +155,16 @@ def _find_embed_model() -> Path:
             )
         return model_path
 
+    # Search in project models directory
     models_dir = DATA_DIR / "models"
     if models_dir.exists():
         for gguf in models_dir.rglob("*[Ee]mbed*.gguf"):
+            return gguf
+
+    # Search in huggingface cache
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+    if hf_cache.exists():
+        for gguf in hf_cache.rglob("*[Ee]mbed*.gguf"):
             return gguf
     return Path("")
 

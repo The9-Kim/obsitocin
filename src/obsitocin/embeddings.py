@@ -52,9 +52,7 @@ def start_embed_server() -> subprocess.Popen:
             f"Embedding model not found: {EMBED_MODEL_PATH}\n\n"
             "Download an embedding model:\n"
             "  pip install huggingface-hub\n"
-            "  hf download Qwen/Qwen3-Embedding-0.6B-GGUF \\\n"
-            "    --include '*Q8_0*' \\\n"
-            "    --local-dir ~/.local/share/obsitocin/models/Qwen3-Embedding-0.6B-GGUF\n\n"
+            "  hf download Qwen/Qwen3-Embedding-0.6B-GGUF --include '*Q8_0*'\n\n"
             "Or set OBS_EMBED_MODEL_PATH=/path/to/embedding-model.gguf"
         )
 
@@ -74,6 +72,8 @@ def start_embed_server() -> subprocess.Popen:
         "8192",
         "--n-gpu-layers",
         "99",
+        "--parallel",
+        "1",
         "--embeddings",
     ]
     log(f"Starting embedding server: {' '.join(cmd)}")
@@ -92,6 +92,7 @@ def start_embed_server() -> subprocess.Popen:
         try:
             response = urllib.request.urlopen(health_url, timeout=2)
             if response.status == 200:
+                time.sleep(1)  # extra settle time after health check
                 log(f"Embedding server ready after {i + 1}s")
                 return _embed_server_proc
         except (urllib.error.URLError, ConnectionError, OSError):
@@ -131,15 +132,17 @@ def _embedding_request(payload: dict) -> dict:
 
 
 def get_embedding(text: str) -> list[float]:
-    body = _embedding_request({"model": "embedding", "input": text[:4000]})
+    body = _embedding_request({"model": "embedding", "input": text[:800]})
     return body["data"][0]["embedding"]
 
 
 def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
-    truncated = [text[:4000] for text in texts]
-    body = _embedding_request({"model": "embedding", "input": truncated})
-    sorted_data = sorted(body["data"], key=lambda item: item["index"])
-    return [item["embedding"] for item in sorted_data]
+    """Embed texts one by one (llama-server crashes on array input)."""
+    results: list[list[float]] = []
+    for text in texts:
+        body = _embedding_request({"model": "embedding", "input": text[:800]})
+        results.append(body["data"][0]["embedding"])
+    return results
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -249,13 +252,20 @@ def embed_topic_notes(vault_dir: Path) -> int:
     try:
         embeddings = get_embeddings_batch(texts)
     except Exception as error:
-        log(f"Batch topic embedding failed, falling back: {error}")
+        log(f"Batch topic embedding failed, restarting server and retrying: {error}")
+        stop_embed_server()
+        start_embed_server()
         embeddings = []
         for text in texts:
             try:
                 embeddings.append(get_embedding(text))
             except Exception:
-                embeddings.append([])
+                try:
+                    stop_embed_server()
+                    start_embed_server()
+                    embeddings.append(get_embedding(text))
+                except Exception:
+                    embeddings.append([])
 
     updated = 0
     for i, (key, embed_text) in enumerate(to_embed):
@@ -422,14 +432,22 @@ def build_embeddings_for_qas(qa_files: list[tuple[str, dict]]) -> int:
     try:
         embeddings = get_embeddings_batch(texts)
     except Exception as error:
-        log(f"Batch embedding failed, falling back to individual: {error}")
+        log(f"Batch embedding failed, restarting server and retrying individually: {error}")
+        stop_embed_server()
+        start_embed_server()
         embeddings = []
         for text in texts:
             try:
                 embeddings.append(get_embedding(text))
-            except Exception as nested_error:
-                log(f"Individual embedding failed: {nested_error}")
-                embeddings.append([])
+            except Exception:
+                # Server may have crashed — restart and retry once
+                try:
+                    stop_embed_server()
+                    start_embed_server()
+                    embeddings.append(get_embedding(text))
+                except Exception as nested_error:
+                    log(f"Individual embedding failed: {nested_error}")
+                    embeddings.append([])
 
     updated = 0
     for i, (file_id, _qa, embed_text) in enumerate(to_embed):
