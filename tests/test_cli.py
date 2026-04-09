@@ -6,7 +6,7 @@ import unittest
 class TestServeCli(unittest.TestCase):
     def _run(self, *args, **kwargs):
         return subprocess.run(
-            ["obsitocin"] + list(args),
+            [sys.executable, "-m", "obsitocin"] + list(args),
             capture_output=True,
             text=True,
         )
