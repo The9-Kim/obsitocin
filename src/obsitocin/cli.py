@@ -939,6 +939,11 @@ def _cmd_reindex(args: argparse.Namespace) -> int:
         _echo(f"Errors ({len(result['errors'])}):")
         for err in result["errors"][:10]:
             _echo(f"  - {err}")
+
+    if getattr(args, "embed", False):
+        _echo("Regenerating embeddings...")
+        return _cmd_embed(args)
+
     _report_config_validation()
     return 0
 
@@ -1198,6 +1203,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--from-vault",
         action="store_true",
         help="Only rebuild topic notes from vault (skip QA entries).",
+    )
+    reindex_parser.add_argument(
+        "--embed",
+        action="store_true",
+        help="Also regenerate embedding vectors after reindexing.",
     )
     reindex_parser.set_defaults(handler=_cmd_reindex)
 

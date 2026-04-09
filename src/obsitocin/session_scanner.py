@@ -19,10 +19,13 @@ AGENT_SESSION_DIRS: dict[str, list[Path]] = {
         Path.home() / ".claude" / "projects",
     ],
     "codex": [
-        Path.home() / ".codex",
+        # Codex CLI does not store local session logs.
+        # Placeholder for future support if the format changes.
+        Path.home() / ".codex" / "sessions",
     ],
     "gemini": [
-        Path.home() / ".gemini",
+        # Gemini CLI (antigravity) stores conversations here.
+        Path.home() / ".gemini" / "antigravity" / "conversations",
     ],
 }
 
@@ -148,9 +151,10 @@ def _get_existing_session_ids() -> set[str]:
     for f in QUEUE_DIR.glob("*.json"):
         try:
             data = json.loads(f.read_text())
-            sid = data.get("session_id", "")
-            if sid:
-                ids.add(sid)
+            if isinstance(data, dict):
+                sid = data.get("session_id", "")
+                if sid:
+                    ids.add(sid)
         except (json.JSONDecodeError, OSError):
             continue
     from obsitocin.config import PROCESSED_DIR
@@ -159,9 +163,10 @@ def _get_existing_session_ids() -> set[str]:
         for f in PROCESSED_DIR.glob("*.json"):
             try:
                 data = json.loads(f.read_text())
-                sid = data.get("session_id", "")
-                if sid:
-                    ids.add(sid)
+                if isinstance(data, dict):
+                    sid = data.get("session_id", "")
+                    if sid:
+                        ids.add(sid)
             except (json.JSONDecodeError, OSError):
                 continue
     return ids
