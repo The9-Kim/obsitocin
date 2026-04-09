@@ -254,7 +254,7 @@ PROFILE_PATH = OBS_DIR / "_Profile.md" if OBS_DIR else None
 VALID_LLM_PROVIDERS = ("codex", "claude", "gemini", "qwen")
 VALID_PII_RISK_LEVELS = ("low", "medium", "high")
 
-LLM_PROVIDER = _get("OBS_LLM_PROVIDER", "llm_provider", "claude").strip().lower()
+LLM_PROVIDER = _get("OBS_LLM_PROVIDER", "llm_provider", "qwen").strip().lower()
 if LLM_PROVIDER not in VALID_LLM_PROVIDERS:
     _add_validation_error(
         f"Invalid llm_provider {LLM_PROVIDER!r}. Falling back to 'claude'."
