@@ -441,6 +441,7 @@ def create_server():
     def ingest_source_tool(
         source: str, project: str | None = None, title: str | None = None
     ) -> dict:
+        """Ingest an external source (URL or file path) into the vault. Saves raw content and updates related topic notes."""
         return ingest_source_mcp(source=source, project=project, title=title)
 
     @mcp.tool(name="ask_wiki")
@@ -449,6 +450,7 @@ def create_server():
         project: str | None = None,
         save_to_wiki: bool = False,
     ) -> dict:
+        """Ask a question against the wiki and get an LLM-generated answer with source citations."""
         return ask_wiki(
             question=question,
             project=project,
