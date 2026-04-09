@@ -279,6 +279,93 @@ def _check_dependencies(llm_provider: str | None = None) -> None:
         _save_config(config)
 
 
+def _generate_schema_md() -> str:
+    return """---
+type: schema
+---
+
+# Obsitocin Vault Schema
+
+## 페이지 구조
+
+모든 주제 노트는 YAML frontmatter를 포함합니다:
+
+```yaml
+---
+title: "페이지 제목"
+type: topic
+sessions: 3
+importance: 4
+tags: [tag1, tag2]
+category: development
+memory_type: static
+---
+```
+
+### Frontmatter 필드
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `title` | string | 주제 이름 |
+| `type` | string | `topic` (주제 노트), `session-raw` (원문) |
+| `sessions` | int | 이 주제가 언급된 세션 수 |
+| `importance` | int (1-5) | 중요도. 4 이상은 `static` 메모리 |
+| `tags` | list[string] | 분류 태그 |
+| `category` | string | development, debugging, architecture, devops 등 |
+| `memory_type` | string | `static` (영구) 또는 `dynamic` (휘발성) |
+
+## 디렉토리 규칙
+
+```
+obsitocin/
+├── SCHEMA.md                           # 이 파일 (볼트 규칙 정의)
+├── _MOC.md                             # 전체 색인 (프로젝트별 주제 + 한줄 요약)
+├── projects/
+│   └── <project>/
+│       ├── _index.md                   # 프로젝트 색인
+│       └── topics/
+│           └── <topic>.md              # 주제 노트 (핵심 지식 축적)
+├── raw/
+│   └── sessions/
+│       └── YYYY-MM-DD/
+│           └── HH-MM-SS_<sid>.md       # 원문 Q&A (immutable)
+└── daily/
+    └── YYYY-MM-DD.md                   # 작업 로그
+```
+
+## 링크 규칙
+
+- 위키링크 형식: `[[projects/<project>/topics/<topic>|표시명]]`
+- 정확한 경로 위키링크 사용 (짧은 링크 지양)
+- MOC/인덱스에서 주제 노트로의 단방향 링크
+
+## 주제 노트 구조
+
+```markdown
+# <제목>
+
+## 핵심 지식
+- 핵심 지식 항목 1
+- 핵심 지식 항목 2
+
+## 히스토리
+- YYYY-MM-DD HH:MM: 작업 내용
+
+## User Notes
+<!-- OBSITOCIN:BEGIN USER NOTES -->
+사용자가 직접 작성한 메모 (자동 갱신 시 보존됨)
+<!-- OBSITOCIN:END USER NOTES -->
+```
+
+## 수정 규칙
+
+- `raw/sessions/` 파일은 **절대 수정 금지** (immutable)
+- `SCHEMA.md`는 사용자가 수정 가능 (init 시 덮어쓰지 않음)
+- 주제 노트의 `User Notes` 블록은 자동 갱신 시 보존됨
+- `_MOC.md`, `_index.md`는 자동 생성/갱신됨
+"""
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     vault_path = Path(args.vault_dir).expanduser().resolve()
     config = _load_config()
@@ -304,9 +391,15 @@ def _cmd_init(args: argparse.Namespace) -> int:
     _echo(f"Data directory: {DATA_DIR}")
 
     kg_dir = vault_path / "obsitocin"
-    for sub in ("projects", "daily"):
+    for sub in ("projects", "daily", "raw/sessions"):
         (kg_dir / sub).mkdir(parents=True, exist_ok=True)
     _echo(f"Knowledge graph directory: {kg_dir}")
+
+    # Generate SCHEMA.md (only if not exists)
+    schema_path = kg_dir / "SCHEMA.md"
+    if not schema_path.exists():
+        schema_path.write_text(_generate_schema_md())
+        _echo("SCHEMA.md created.")
 
     from obsitocin.hooks import register_hooks
 
@@ -826,6 +919,51 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_reindex(args: argparse.Namespace) -> int:
+    from obsitocin.config import OBS_DIR, SEARCH_DB_PATH
+
+    if OBS_DIR is None:
+        print("Error: Vault not configured. Run 'obsitocin init'.", file=sys.stderr)
+        return 1
+
+    from obsitocin.reindex import reindex_all
+
+    from_vault_only = getattr(args, "from_vault", False)
+    _echo("Reindexing search.db from vault...")
+    result = reindex_all(
+        OBS_DIR, PROCESSED_DIR, SEARCH_DB_PATH, from_vault_only=from_vault_only
+    )
+    _echo(f"Topics indexed: {result['topics_indexed']}")
+    _echo(f"QAs indexed: {result['qas_indexed']}")
+    if result["errors"]:
+        _echo(f"Errors ({len(result['errors'])}):")
+        for err in result["errors"][:10]:
+            _echo(f"  - {err}")
+    _report_config_validation()
+    return 0
+
+
+def _cmd_scan(args: argparse.Namespace) -> int:
+    from obsitocin.session_scanner import scan_sessions
+
+    result = scan_sessions(
+        args.source,
+        dry_run=getattr(args, "dry_run", False),
+        limit=getattr(args, "limit", None),
+    )
+
+    prefix = "Would queue" if getattr(args, "dry_run", False) else "Queued"
+    _echo(f"Scanned: {result['scanned']}")
+    _echo(f"{prefix}: {result['queued']}")
+    _echo(f"Skipped (duplicate/empty): {result['skipped']}")
+    if result["errors"]:
+        _echo(f"Errors ({len(result['errors'])}):")
+        for err in result["errors"][:10]:
+            _echo(f"  - {err}")
+    _report_config_validation()
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     try:
         __import__("fastmcp")
@@ -1051,6 +1189,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show what would be committed without making changes.",
     )
     sync_parser.set_defaults(handler=_cmd_sync)
+
+    reindex_parser = subparsers.add_parser(
+        "reindex",
+        help="Rebuild search.db from vault markdown and processed files.",
+    )
+    reindex_parser.add_argument(
+        "--from-vault",
+        action="store_true",
+        help="Only rebuild topic notes from vault (skip QA entries).",
+    )
+    reindex_parser.set_defaults(handler=_cmd_reindex)
+
+    scan_parser = subparsers.add_parser(
+        "scan",
+        help="Scan AI agent session logs and queue them for processing.",
+    )
+    scan_parser.add_argument(
+        "source",
+        choices=["claude_code", "codex", "gemini"],
+        help="Agent source to scan.",
+    )
+    scan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be queued without writing files.",
+    )
+    scan_parser.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum number of sessions to queue.",
+    )
+    scan_parser.set_defaults(handler=_cmd_scan)
 
     uninstall_parser = subparsers.add_parser(
         "uninstall", help="Remove Claude Code hooks and optional local config."

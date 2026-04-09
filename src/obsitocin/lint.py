@@ -202,18 +202,203 @@ def check_moc_consistency(vault_dir: Path) -> list[dict]:
     return issues
 
 
+def _resolve_db_path(vault_dir: Path) -> Path | None:
+    """Return search.db path only if it belongs to the given vault."""
+    try:
+        from obsitocin.config import OBS_DIR, SEARCH_DB_PATH
+
+        if not SEARCH_DB_PATH.exists():
+            return None
+        # Only run DB checks when vault_dir matches the configured vault
+        if OBS_DIR is not None and vault_dir.resolve() == OBS_DIR.resolve():
+            return SEARCH_DB_PATH
+    except Exception:
+        pass
+    return None
+
+
+def check_db_vault_consistency(vault_dir: Path) -> list[dict]:
+    """Check that search.db entries and vault topic files are in sync."""
+    issues: list[dict] = []
+    try:
+        db_path = _resolve_db_path(vault_dir)
+        if db_path is None:
+            return []
+        from obsitocin.search_db import ensure_schema, get_connection
+
+        conn = get_connection(db_path)
+        ensure_schema(conn)
+
+        # DB topic entries without vault files
+        rows = conn.execute(
+            "SELECT file_id, title, project FROM qa_entries WHERE source_type = 'topic_note'"
+        ).fetchall()
+        for row in rows:
+            title = row["title"]
+            project = row["project"]
+            if project and title:
+                topic_path = vault_dir / "projects" / project / "topics"
+                candidates = [
+                    topic_path / f"{title}.md",
+                    topic_path / f"{_topic_file_stem(title)}.md",
+                ]
+                if not any(c.exists() for c in candidates):
+                    issues.append(
+                        {
+                            "type": "db_orphan_entry",
+                            "file_id": row["file_id"],
+                            "message": f"DB entry has no vault file: {row['file_id']}",
+                        }
+                    )
+
+        # Vault topics without DB entries
+        projects_dir = vault_dir / "projects"
+        if projects_dir.exists():
+            for project_dir in projects_dir.iterdir():
+                if not project_dir.is_dir():
+                    continue
+                topics_dir = project_dir / "topics"
+                if not topics_dir.exists():
+                    continue
+                for f in topics_dir.glob("*.md"):
+                    try:
+                        content = f.read_text(errors="replace")
+                    except OSError:
+                        continue
+                    title = _extract_fm(content, "title", f.stem)
+                    db_key = f"topic:{project_dir.name}:{title}"
+                    entry = conn.execute(
+                        "SELECT file_id FROM qa_entries WHERE file_id = ?",
+                        (db_key,),
+                    ).fetchone()
+                    if not entry:
+                        issues.append(
+                            {
+                                "type": "db_missing_entry",
+                                "path": str(f.relative_to(vault_dir)),
+                                "message": f"Vault topic not indexed in search.db: {title}",
+                            }
+                        )
+
+        conn.close()
+    except Exception:
+        pass
+    return issues
+
+
+def _topic_file_stem(text: str) -> str:
+    clean = re.sub(r'[\\/:*?"<>|]', "", text).strip() or "untitled"
+    return clean[:80]
+
+
+def check_fts_integrity(vault_dir: Path) -> list[dict]:
+    """Verify FTS index row count matches qa_entries."""
+    issues: list[dict] = []
+    try:
+        db_path = _resolve_db_path(vault_dir)
+        if db_path is None:
+            return []
+        from obsitocin.search_db import ensure_schema, get_connection
+
+        conn = get_connection(db_path)
+        ensure_schema(conn)
+
+        entry_count = conn.execute("SELECT COUNT(*) FROM qa_entries").fetchone()[0]
+        fts_count = conn.execute("SELECT COUNT(*) FROM qa_fts").fetchone()[0]
+
+        if entry_count != fts_count:
+            issues.append(
+                {
+                    "type": "fts_count_mismatch",
+                    "entries": entry_count,
+                    "fts_rows": fts_count,
+                    "message": f"FTS index has {fts_count} rows but qa_entries has {entry_count}",
+                }
+            )
+
+        try:
+            conn.execute("INSERT INTO qa_fts(qa_fts) VALUES('integrity-check')")
+        except Exception as e:
+            issues.append(
+                {
+                    "type": "fts_integrity_error",
+                    "message": f"FTS integrity check failed: {e}",
+                }
+            )
+
+        conn.close()
+    except Exception:
+        pass
+    return issues
+
+
+def check_orphan_embeddings(vault_dir: Path) -> list[dict]:
+    """Find embeddings/chunks without matching parent records."""
+    issues: list[dict] = []
+    try:
+        db_path = _resolve_db_path(vault_dir)
+        if db_path is None:
+            return []
+        from obsitocin.search_db import ensure_schema, get_connection
+
+        conn = get_connection(db_path)
+        ensure_schema(conn)
+
+        # Embeddings without chunks
+        orphan_emb = conn.execute(
+            """SELECT e.chunk_id FROM embeddings e
+               LEFT JOIN chunks c ON e.chunk_id = c.chunk_id
+               WHERE c.chunk_id IS NULL"""
+        ).fetchall()
+        for row in orphan_emb:
+            issues.append(
+                {
+                    "type": "orphan_embedding",
+                    "chunk_id": row[0],
+                    "message": f"Embedding for chunk_id={row[0]} has no matching chunk",
+                }
+            )
+
+        # Chunks without entries
+        orphan_chunks = conn.execute(
+            """SELECT c.chunk_id, c.file_id FROM chunks c
+               LEFT JOIN qa_entries e ON c.file_id = e.file_id
+               WHERE e.file_id IS NULL"""
+        ).fetchall()
+        for row in orphan_chunks:
+            issues.append(
+                {
+                    "type": "orphan_chunk",
+                    "chunk_id": row[0],
+                    "file_id": row[1],
+                    "message": f"Chunk {row[0]} references missing entry '{row[1]}'",
+                }
+            )
+
+        conn.close()
+    except Exception:
+        pass
+    return issues
+
+
 def run_all_checks(vault_dir: Path, min_knowledge: int = 2) -> dict:
     """Run all lint checks. Returns summary dict with check results."""
     broken_wikilinks = check_broken_wikilinks(vault_dir)
     orphan_topics = check_orphan_topics(vault_dir)
     thin_notes = check_thin_notes(vault_dir, min_knowledge=min_knowledge)
     moc_consistency = check_moc_consistency(vault_dir)
+    db_vault = check_db_vault_consistency(vault_dir)
+    fts = check_fts_integrity(vault_dir)
+    orphan_emb = check_orphan_embeddings(vault_dir)
 
     total_issues = (
         len(broken_wikilinks)
         + len(orphan_topics)
         + len(thin_notes)
         + len(moc_consistency)
+        + len(db_vault)
+        + len(fts)
+        + len(orphan_emb)
     )
 
     return {
@@ -224,6 +409,9 @@ def run_all_checks(vault_dir: Path, min_knowledge: int = 2) -> dict:
             "orphan_topics": orphan_topics,
             "thin_notes": thin_notes,
             "moc_consistency": moc_consistency,
+            "db_vault_consistency": db_vault,
+            "fts_integrity": fts,
+            "orphan_embeddings": orphan_emb,
         },
         "clean": total_issues == 0,
     }

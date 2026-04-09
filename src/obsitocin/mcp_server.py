@@ -391,6 +391,51 @@ def search_knowledge(query: str, top_k: int = 5) -> list[dict]:
         return []
 
 
+def recall_multi(queries: list[dict], top_k: int = 5) -> list[dict]:
+    """Execute multiple typed queries and merge results.
+
+    Each query: {"type": "keyword"|"semantic"|"temporal", "text": "...",
+                 "date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD",
+                 "filters": {...}}
+    """
+    from obsitocin.memory_query import query as memory_query
+
+    all_results: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for q in queries:
+        qtype = q.get("type", "semantic")
+        text = q.get("text", "")
+        if not text:
+            continue
+        filters = dict(q.get("filters") or {})
+
+        if qtype == "keyword":
+            mode = "bm25"
+        elif qtype == "temporal":
+            mode = "bm25"
+            if "date_from" in q:
+                filters["date_from"] = q["date_from"]
+            if "date_to" in q:
+                filters["date_to"] = q["date_to"]
+        else:
+            mode = "hybrid"
+
+        try:
+            results = memory_query(text, top_k=top_k, filters=filters or None, mode=mode)
+        except Exception:
+            results = []
+
+        for r in results:
+            fid = r.get("file_id", "")
+            if fid and fid not in seen_ids:
+                seen_ids.add(fid)
+                r["matched_by"] = qtype
+                all_results.append(r)
+
+    return all_results
+
+
 def create_server():
     try:
         FastMCP = import_module("fastmcp").FastMCP
@@ -461,6 +506,15 @@ def create_server():
     def get_project_context_tool(project: str | None = None) -> str:
         """Get context summary for a project. Use at session start to recall prior knowledge."""
         return get_project_context(project=project)
+
+    @mcp.tool(name="recall")
+    def recall_tool(queries: list[dict], top_k: int = 5) -> list[dict]:
+        """Multi-modal search combining keyword, semantic, and temporal queries in one call.
+
+        Each query item: {"type": "keyword"|"semantic"|"temporal", "text": "...",
+        "date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD", "filters": {...}}
+        """
+        return recall_multi(queries, top_k=top_k)
 
     return mcp
 

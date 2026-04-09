@@ -129,6 +129,7 @@ MCP 서버가 제공하는 도구:
 | `get_project_context` | 프로젝트 컨텍스트 요약            | `get_project_context("my-api")`                      |
 | `ingest_source`       | 외부 소스(URL/파일) 수집          | `ingest_source("https://example.com")`               |
 | `ask_wiki`            | 위키 기반 Q&A (출처 포함 LLM 답변) | `ask_wiki("환불 정책이 뭐야?")`                      |
+| `recall`              | 복합 검색 (keyword+semantic+temporal) | `recall([{"type":"keyword","text":"Docker"},{"type":"temporal","text":"배포","date_from":"2026-04-01"}])` |
 
 **Claude Code에서 MCP 연동:**
 
@@ -199,8 +200,17 @@ obsitocin sync                           # vault Git 동기화 (pull → commit 
 obsitocin sync --local-only              # 로컬 커밋만 (push 안 함)
 obsitocin sync --dry-run                 # 미리보기
 
+# 멀티 에이전트 세션 스캔
+obsitocin scan claude_code               # Claude Code 세션 로그 스캔 → queue
+obsitocin scan codex                     # Codex CLI 세션 로그 스캔
+obsitocin scan gemini                    # Gemini CLI 세션 로그 스캔
+obsitocin scan codex --dry-run           # 미리보기
+obsitocin scan codex --limit 10          # 최대 10개만
+
 # 데이터베이스
 obsitocin migrate                        # embeddings.json → SQLite 마이그레이션
+obsitocin reindex                        # vault + processed → search.db 재구축
+obsitocin reindex --from-vault           # vault 주제 노트만 재구축
 
 # Vault 품질 관리
 obsitocin lint                         # 콘텐츠 점검 (4가지)
@@ -225,12 +235,15 @@ obsitocin uninstall                    # 훅 제거
 obsitocin lint
 ```
 
-4가지 점검을 수행합니다:
+7가지 점검을 수행합니다:
 
 - **깨진 위키링크** — MOC/인덱스의 링크가 실제 파일과 일치하는지
 - **고아 주제** — 다른 파일에서 참조되지 않는 주제 노트
 - **빈약한 노트** — 핵심 지식이 2개 미만인 주제 (임계치 조정 가능)
 - **MOC 불일치** — 파일은 있는데 MOC에 없거나, 반대 경우
+- **DB↔vault 정합성** — search.db 엔트리와 vault 파일 간 불일치
+- **FTS 무결성** — FTS5 인덱스와 qa_entries 행 수 일치 검증
+- **고아 임베딩** — chunks/entries 없는 임베딩 벡터
 
 ---
 

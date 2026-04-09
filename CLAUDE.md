@@ -5,8 +5,8 @@
 ## 아키텍처 핵심
 
 - `processor.py`: `source_type` 분기 태깅 (`claude_code` → Q&A 프롬프트, 기타 → 범용 프롬프트). `compute_content_hash()` 출력 변경 금지 (레거시 호환).
-- `source_adapter.py`: `SourceItem` Protocol + `KNOWN_SOURCE_TYPES` = {claude_code, slack, jira, confluence, git, manual}. 새 소스는 여기 등록.
-- `mcp_server.py`: FastMCP 8개 도구 — search_knowledge, list_topics, read_topic, get_work_log, save_insight, get_project_context, ingest_source, ask_wiki. `fastmcp`는 optional dep.
+- `source_adapter.py`: `SourceItem` Protocol + `KNOWN_SOURCE_TYPES` = {claude_code, codex, gemini, claude_ai, slack, jira, confluence, git, manual}. 새 소스는 여기 등록.
+- `mcp_server.py`: FastMCP 9개 도구 — search_knowledge, list_topics, read_topic, get_work_log, save_insight, get_project_context, ingest_source, ask_wiki, recall. `fastmcp`는 optional dep.
 - `embeddings.py`: Q&A + 주제 노트를 동일 인덱스에 저장. 주제 노트 키: `topic:{project}:{title}`. JSON + SQLite 듀얼 라이트.
 - `search_db.py`: SQLite + FTS5 검색 DB. BM25 키워드 검색 + 벡터 검색. `embeddings.json` 대체/보완. 마이그레이션: `obsitocin migrate`.
 - `hybrid_search.py`: BM25 + 벡터를 RRF(k=60)로 결합. mode: hybrid/bm25/vector.
@@ -16,7 +16,9 @@
 - `git_sync.py`: Git vault 동기화. pull → process → commit → push. 충돌 자동 해결(생성 파일은 ours, topic은 USER NOTES 병합).
 - `topic_writer.py`: `update_moc()`에서 핵심 지식 첫 bullet → 한줄 요약. `<!-- OBSITOCIN:BEGIN USER NOTES -->` 블록만 보존. 원문 보존: `raw/sessions/YYYY-MM-DD/` 에 immutable session note 저장.
 - `ingest.py`: 수동/외부 소스 수집 진입점. 원문은 `raw/`에 보존하고, 요약은 `projects/<project>/sources/`에 source page로 저장한 뒤 관련 topic note를 갱신.
-- `lint.py`: 깨진 위키링크, 고아 주제, 빈약 노트, MOC 불일치 4가지 점검.
+- `lint.py`: 7가지 점검 — 깨진 위키링크, 고아 주제, 빈약 노트, MOC 불일치, DB↔vault 정합성, FTS 무결성, 고아 임베딩.
+- `reindex.py`: vault MD에서 search.db를 재구축. `reindex_from_vault()` (주제 노트) + `reindex_from_processed()` (QA).
+- `session_scanner.py`: 멀티 에이전트 세션 로그 스캔. claude_code/codex/gemini 디렉토리 탐색 → queue 변환.
 - `qa_logger.py`: 훅 핸들러. queue JSON에 `source_type: "claude_code"` + `source_metadata` 포함.
 - `identity.py`: `compute_content_hash()` (레거시, 변경 금지) + `compute_source_hash()` (범용).
 - `pii.py`: 정규식 PII 감지. `--detect-pii --redact-pii --skip-sensitive`.
@@ -29,9 +31,11 @@
   → embeddings(Q&A+주제노트) → topic_writer → vault/{projects,daily,raw/sessions,_MOC.md}
   → search.db(SQLite+FTS5) → hybrid_search(BM25+Vector+RRF)
 
-MCP (obsitocin serve): search_knowledge | list/read_topic | get_work_log | save_insight | get_project_context | ingest_source | ask_wiki
+MCP (obsitocin serve): search_knowledge | recall | list/read_topic | get_work_log | save_insight | get_project_context | ingest_source | ask_wiki
 
+obsitocin scan: claude_code/codex/gemini 세션 로그 → queue (멀티 에이전트)
 obsitocin sync: git pull → process → commit → push (multi-device vault sync)
+obsitocin reindex: vault MD → search.db 재구축 (MD = source of truth)
 ```
 
 `obsitocin ingest`와 MCP `ingest_source`는 동일한 `obsitocin.ingest.ingest_source()`를 호출한다.

@@ -6,6 +6,9 @@ from typing import Protocol, runtime_checkable
 KNOWN_SOURCE_TYPES: frozenset[str] = frozenset(
     {
         "claude_code",
+        "codex",
+        "gemini",
+        "claude_ai",
         "slack",
         "jira",
         "confluence",
