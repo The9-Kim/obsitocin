@@ -122,12 +122,22 @@ def _query_via_db(
     top_k: int,
     filters: dict | None,
     mode: str,
+    expand: bool = False,
 ) -> list[dict]:
     """Query using SQLite hybrid search."""
-    from obsitocin.hybrid_search import hybrid_query
+    from obsitocin.hybrid_search import hybrid_query, hybrid_query_multi
 
-    # Generate query embedding if needed
-    query_embedding: list[float] = []
+    # Query expansion via local Qwen
+    queries = [query_text]
+    if expand:
+        try:
+            from obsitocin.query_expansion import expand_query
+            queries = expand_query(query_text)
+        except Exception:
+            pass
+
+    # Generate query embeddings if needed
+    query_embeddings: list[list[float]] = []
     if mode in ("hybrid", "vector"):
         if not is_configured():
             if mode == "vector":
@@ -138,7 +148,8 @@ def _query_via_db(
         else:
             try:
                 start_embed_server()
-                query_embedding = get_embedding(query_text)
+                for q in queries:
+                    query_embeddings.append(get_embedding(q))
             except Exception:
                 if mode == "vector":
                     raise
@@ -148,17 +159,40 @@ def _query_via_db(
                     stop_embed_server()
 
     try:
-        results = hybrid_query(
-            SEARCH_DB_PATH,
-            query_text,
-            query_embedding,
-            top_k=top_k,
-            filters=filters,
-            mode=mode,
-        )
+        if len(queries) > 1:
+            results = hybrid_query_multi(
+                SEARCH_DB_PATH,
+                queries,
+                query_embeddings,
+                top_k=top_k,
+                filters=filters,
+                mode=mode,
+            )
+        else:
+            emb = query_embeddings[0] if query_embeddings else []
+            results = hybrid_query(
+                SEARCH_DB_PATH,
+                query_text,
+                emb,
+                top_k=top_k,
+                filters=filters,
+                mode=mode,
+            )
     finally:
-        if query_embedding:
+        if query_embeddings:
             stop_embed_server()
+
+    # Load staleness data
+    stale_topics: set[tuple[str, str]] = set()
+    try:
+        from obsitocin.search_db import get_connection as _get_conn, ensure_schema as _ensure, get_stale_topics
+        _conn = _get_conn(SEARCH_DB_PATH)
+        _ensure(_conn)
+        for st in get_stale_topics(_conn):
+            stale_topics.add((st["project"], st["topic"]))
+        _conn.close()
+    except Exception:
+        pass
 
     # Normalize to standard result schema
     normalized = []
@@ -186,9 +220,13 @@ def _query_via_db(
             except (ValueError, TypeError):
                 concepts = []
 
+        project = r.get("project", "uncategorized")
+        title = r.get("title", "Untitled")
+        is_stale = (project, title) in stale_topics
+
         normalized.append({
             "file_id": r.get("file_id", ""),
-            "title": r.get("title", "Untitled"),
+            "title": title,
             "work_summary": r.get("work_summary", ""),
             "distilled_knowledge": [],
             "similarity": round(r.get("similarity", r.get("rrf_score", 0)), 4),
@@ -197,8 +235,9 @@ def _query_via_db(
             "category": r.get("category", "other"),
             "tags": tags,
             "date": date_str,
-            "project": r.get("project", "uncategorized"),
+            "project": project,
             "source_type": r.get("source_type", "qa"),
+            "stale": is_stale,
         })
     return normalized
 
@@ -340,6 +379,7 @@ def query(
     top_k: int = 5,
     filters: dict | None = None,
     mode: str = "hybrid",
+    expand: bool | None = None,
 ) -> list[dict]:
     """Search across all accumulated Q&A pairs.
 
@@ -348,12 +388,16 @@ def query(
         top_k: Number of results to return
         filters: Optional filters (memory_type, category, importance_min, tags, date_from, date_to)
         mode: Search mode — "hybrid" (BM25+vector), "bm25", or "vector"
+        expand: Enable multi-query expansion via Qwen. None = use config default.
 
     Returns list of:
         {file_id, title, work_summary, similarity, importance, topics, category, tags, date, project}
     """
+    if expand is None:
+        from obsitocin.config import QUERY_EXPANSION
+        expand = QUERY_EXPANSION
     if _db_has_entries():
-        return _query_via_db(query_text, top_k, filters, mode)
+        return _query_via_db(query_text, top_k, filters, mode, expand=expand)
     return _query_via_json(query_text, top_k, filters)
 
 

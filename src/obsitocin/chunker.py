@@ -98,6 +98,53 @@ def chunk_text(
     return chunks if chunks else [""]
 
 
+def chunk_by_structure(
+    text: str,
+    *,
+    max_chars: int = DEFAULT_MAX_CHUNK_CHARS,
+) -> list[str]:
+    """Split markdown text at structural boundaries (headings, bullet groups).
+
+    Designed for topic notes where ## headings and bullet groups form
+    natural semantic units. Falls back to chunk_text() for non-markdown.
+    """
+    if not text or len(text) <= max_chars:
+        return [text] if text else [""]
+
+    import re
+
+    # Split on ## headings (keep heading with its content)
+    sections: list[str] = []
+    parts = re.split(r"(?=\n## )", text)
+    for part in parts:
+        stripped = part.strip()
+        if not stripped:
+            continue
+        if len(stripped) <= max_chars:
+            sections.append(stripped)
+        else:
+            # Section too large — split on bullet groups (empty line between bullets)
+            bullet_groups = re.split(r"\n\n+", stripped)
+            current = ""
+            for group in bullet_groups:
+                candidate = (current + "\n\n" + group) if current else group
+                if len(candidate) <= max_chars:
+                    current = candidate
+                else:
+                    if current:
+                        sections.append(current)
+                    # If single group exceeds max, fall back to char-level split
+                    if len(group) > max_chars:
+                        sections.extend(chunk_text(group, max_chars=max_chars, overlap_ratio=0.10))
+                        current = ""
+                    else:
+                        current = group
+            if current:
+                sections.append(current)
+
+    return sections if sections else chunk_text(text, max_chars=max_chars)
+
+
 def chunks_for_qa(qa: dict) -> list[str]:
     """Generate chunks from a processed Q&A entry.
 

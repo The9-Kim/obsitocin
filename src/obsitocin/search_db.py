@@ -15,7 +15,7 @@ from pathlib import Path
 
 from obsitocin.config import SEARCH_DB_PATH
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # ── Schema ──
 
@@ -96,6 +96,27 @@ CREATE TABLE IF NOT EXISTS embeddings (
     embedding   BLOB NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS topic_updates (
+    project       TEXT NOT NULL,
+    topic         TEXT NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    session_id    TEXT NOT NULL DEFAULT '',
+    work_summary  TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (project, topic)
+);
+
+CREATE TABLE IF NOT EXISTS topic_links (
+    source_project TEXT NOT NULL,
+    source_topic   TEXT NOT NULL,
+    target_project TEXT NOT NULL,
+    target_topic   TEXT NOT NULL,
+    link_type      TEXT NOT NULL DEFAULT 'related',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (source_project, source_topic, target_project, target_topic)
+);
+CREATE INDEX IF NOT EXISTS idx_topic_links_target
+    ON topic_links(target_project, target_topic);
 """
 
 
@@ -506,6 +527,139 @@ def migrate_from_json(
     conn.commit()
     conn.close()
     return {"entries_migrated": migrated, "chunks_created": chunks_created, "errors": errors}
+
+
+# ── Topic updates (staleness tracking) ──
+
+
+def upsert_topic_update(
+    conn: sqlite3.Connection,
+    project: str,
+    topic: str,
+    session_id: str = "",
+    work_summary: str = "",
+) -> None:
+    """Record that a topic note was updated."""
+    now = datetime.now().isoformat()
+    conn.execute(
+        """INSERT INTO topic_updates(project, topic, updated_at, session_id, work_summary)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(project, topic) DO UPDATE SET
+            updated_at=excluded.updated_at,
+            session_id=excluded.session_id,
+            work_summary=excluded.work_summary
+        """,
+        (project, topic, now, session_id, work_summary),
+    )
+
+
+def get_topic_update(
+    conn: sqlite3.Connection, project: str, topic: str
+) -> dict | None:
+    """Get the last update info for a topic."""
+    row = conn.execute(
+        "SELECT * FROM topic_updates WHERE project=? AND topic=?",
+        (project, topic),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_stale_topics(
+    conn: sqlite3.Connection, stale_days: int = 7
+) -> list[dict]:
+    """Find topics with recent Q&A activity but stale notes.
+
+    A topic is stale if it was last updated more than stale_days ago
+    AND there are newer qa_entries referencing it.
+    """
+    sql = """
+        SELECT tu.project, tu.topic, tu.updated_at,
+               MAX(e.timestamp) AS latest_qa_timestamp,
+               COUNT(e.file_id) AS pending_qa_count
+        FROM topic_updates tu
+        JOIN qa_entries e ON e.project = tu.project
+            AND (e.key_concepts LIKE '%' || tu.topic || '%'
+                 OR e.title LIKE '%' || tu.topic || '%')
+        WHERE e.timestamp > tu.updated_at
+        GROUP BY tu.project, tu.topic
+        HAVING pending_qa_count > 0
+        ORDER BY pending_qa_count DESC
+    """
+    rows = conn.execute(sql).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Topic links ──
+
+
+VALID_LINK_TYPES = ("related", "uses", "extends", "conflicts_with", "part_of")
+
+
+def upsert_topic_link(
+    conn: sqlite3.Connection,
+    source_project: str,
+    source_topic: str,
+    target_project: str,
+    target_topic: str,
+    link_type: str = "related",
+) -> None:
+    """Create or update a typed link between two topics."""
+    if link_type not in VALID_LINK_TYPES:
+        link_type = "related"
+    conn.execute(
+        """INSERT INTO topic_links(
+            source_project, source_topic, target_project, target_topic, link_type
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source_project, source_topic, target_project, target_topic)
+        DO UPDATE SET link_type=excluded.link_type
+        """,
+        (source_project, source_topic, target_project, target_topic, link_type),
+    )
+
+
+def get_topic_links(
+    conn: sqlite3.Connection, project: str, topic: str
+) -> list[dict]:
+    """Get all outgoing links from a topic."""
+    rows = conn.execute(
+        """SELECT target_project, target_topic, link_type, created_at
+        FROM topic_links
+        WHERE source_project=? AND source_topic=?
+        ORDER BY link_type, target_topic""",
+        (project, topic),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_topic_backlinks(
+    conn: sqlite3.Connection, project: str, topic: str
+) -> list[dict]:
+    """Get all incoming links to a topic."""
+    rows = conn.execute(
+        """SELECT source_project, source_topic, link_type, created_at
+        FROM topic_links
+        WHERE target_project=? AND target_topic=?
+        ORDER BY link_type, source_topic""",
+        (project, topic),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_topic_link(
+    conn: sqlite3.Connection,
+    source_project: str,
+    source_topic: str,
+    target_project: str,
+    target_topic: str,
+) -> bool:
+    """Delete a link between two topics."""
+    cursor = conn.execute(
+        """DELETE FROM topic_links
+        WHERE source_project=? AND source_topic=?
+          AND target_project=? AND target_topic=?""",
+        (source_project, source_topic, target_project, target_topic),
+    )
+    return cursor.rowcount > 0
 
 
 # ── Stats ──

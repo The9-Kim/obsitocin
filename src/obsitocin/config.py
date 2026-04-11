@@ -330,6 +330,8 @@ if TOKENIZER not in VALID_TOKENIZERS:
 GIT_AUTO_SYNC = _get_bool("OBS_GIT_AUTO_SYNC", "git_auto_sync", False)
 GIT_REMOTE = _get("OBS_GIT_REMOTE", "git_remote", "origin").strip()
 
+QUERY_EXPANSION = _get_bool("OBS_QUERY_EXPANSION", "query_expansion", False)
+
 
 def get_config_validation_errors() -> list[str]:
     return list(_VALIDATION_ERRORS)

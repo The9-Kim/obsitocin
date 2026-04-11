@@ -381,6 +381,100 @@ def check_orphan_embeddings(vault_dir: Path) -> list[dict]:
     return issues
 
 
+def _find_db_for_vault(vault_dir: Path) -> Path | None:
+    """Find search.db that corresponds to this vault."""
+    from obsitocin.config import SEARCH_DB_PATH, OBS_DIR
+    # Only use global DB if vault_dir matches the configured vault
+    if OBS_DIR and vault_dir == OBS_DIR and SEARCH_DB_PATH.exists():
+        return SEARCH_DB_PATH
+    return None
+
+
+def check_orphan_links(vault_dir: Path) -> list[dict]:
+    """Find typed links pointing to topics that no longer exist in the vault."""
+    try:
+        db_path = _find_db_for_vault(vault_dir)
+        if not db_path:
+            return []
+        from obsitocin.search_db import ensure_schema, get_connection
+
+        conn = get_connection(db_path)
+        ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT source_project, source_topic, target_project, target_topic, link_type "
+            "FROM topic_links"
+        ).fetchall()
+        conn.close()
+
+        issues = []
+        projects_dir = vault_dir / "projects"
+        for row in rows:
+            r = dict(row)
+            target_dir = projects_dir / r["target_project"] / "topics"
+            if not target_dir.exists():
+                issues.append({
+                    "source": f"{r['source_project']}/{r['source_topic']}",
+                    "target": f"{r['target_project']}/{r['target_topic']}",
+                    "link_type": r["link_type"],
+                    "severity": "warn",
+                    "message": f"Link {r['link_type']}: {r['source_project']}/{r['source_topic']} → {r['target_project']}/{r['target_topic']} (target project missing)",
+                })
+                continue
+            # Check if target topic file exists
+            found = False
+            for f in target_dir.glob("*.md"):
+                content = f.read_text(errors="replace")
+                title_m = _extract_fm(content, "title")
+                if title_m and title_m.lower() == r["target_topic"].lower():
+                    found = True
+                    break
+                if f.stem.lower() == r["target_topic"].lower():
+                    found = True
+                    break
+            if not found:
+                issues.append({
+                    "source": f"{r['source_project']}/{r['source_topic']}",
+                    "target": f"{r['target_project']}/{r['target_topic']}",
+                    "link_type": r["link_type"],
+                    "severity": "warn",
+                    "message": f"Link {r['link_type']}: {r['source_project']}/{r['source_topic']} → {r['target_project']}/{r['target_topic']} (target topic missing)",
+                })
+        return issues
+    except Exception:
+        return []
+
+
+def check_stale_topics(vault_dir: Path) -> list[dict]:
+    """Find topic notes that have newer Q&A entries not yet reflected."""
+    try:
+        db_path = _find_db_for_vault(vault_dir)
+        if not db_path:
+            return []
+        from obsitocin.search_db import ensure_schema, get_connection, get_stale_topics
+
+        conn = get_connection(db_path)
+        ensure_schema(conn)
+        stale = get_stale_topics(conn)
+        conn.close()
+        return [
+            {
+                "project": s["project"],
+                "topic": s["topic"],
+                "last_updated": s["updated_at"],
+                "latest_qa": s.get("latest_qa_timestamp", ""),
+                "pending_qa_count": s.get("pending_qa_count", 0),
+                "severity": "info",
+                "message": (
+                    f"{s['project']}/{s['topic']}: last updated {s['updated_at']}, "
+                    f"{s.get('pending_qa_count', 0)} newer Q&A entries"
+                ),
+            }
+            for s in stale
+        ]
+    except Exception:
+        return []
+
+
 def run_all_checks(vault_dir: Path, min_knowledge: int = 2) -> dict:
     """Run all lint checks. Returns summary dict with check results."""
     broken_wikilinks = check_broken_wikilinks(vault_dir)
@@ -390,6 +484,8 @@ def run_all_checks(vault_dir: Path, min_knowledge: int = 2) -> dict:
     db_vault = check_db_vault_consistency(vault_dir)
     fts = check_fts_integrity(vault_dir)
     orphan_emb = check_orphan_embeddings(vault_dir)
+    stale = check_stale_topics(vault_dir)
+    orphan_links = check_orphan_links(vault_dir)
 
     total_issues = (
         len(broken_wikilinks)
@@ -399,6 +495,8 @@ def run_all_checks(vault_dir: Path, min_knowledge: int = 2) -> dict:
         + len(db_vault)
         + len(fts)
         + len(orphan_emb)
+        + len(stale)
+        + len(orphan_links)
     )
 
     return {
@@ -412,6 +510,8 @@ def run_all_checks(vault_dir: Path, min_knowledge: int = 2) -> dict:
             "db_vault_consistency": db_vault,
             "fts_integrity": fts,
             "orphan_embeddings": orphan_emb,
+            "stale_topics": stale,
+            "orphan_links": orphan_links,
         },
         "clean": total_issues == 0,
     }

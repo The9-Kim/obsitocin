@@ -198,6 +198,7 @@ def topic_note_to_embed_text(note_path: Path) -> str:
             if stripped:
                 knowledge_items.append(stripped)
 
+    # Exclude timeline/history sections from embedding text (noise)
     parts = [f"{project} {title}" if project else title]
     parts.extend(knowledge_items[:10])
     return "\n".join(parts)
@@ -348,8 +349,9 @@ def _sync_topics_to_db(
     to_embed: list[tuple[str, str]],
     embeddings: list[list[float]],
 ) -> None:
-    """Write topic note entries + embeddings to SQLite (non-blocking)."""
+    """Write topic note entries + chunked embeddings to SQLite (non-blocking)."""
     try:
+        from obsitocin.chunker import chunk_by_structure
         from obsitocin.search_db import (
             ensure_schema,
             get_connection,
@@ -382,10 +384,16 @@ def _sync_topics_to_db(
             }
             upsert_qa_entry(conn, key, metadata)
 
+            # Use structural chunking for topic notes
+            text_chunks = chunk_by_structure(embed_text)
             chunk_dicts = [
-                {"chunk_index": 0, "chunk_text": embed_text, "text_hash": text_hash(embed_text)}
+                {"chunk_index": ci, "chunk_text": ct, "text_hash": text_hash(ct)}
+                for ci, ct in enumerate(text_chunks)
             ]
             chunk_ids = upsert_chunks(conn, key, chunk_dicts)
+
+            # Store embedding for first chunk; additional chunks would need
+            # separate embed calls (done during full reindex)
             if chunk_ids:
                 store_chunk_embeddings(conn, [(chunk_ids[0], embeddings[i])])
 

@@ -36,6 +36,8 @@ LOG_FILE = LOGS_DIR / "topic_writer.log" if LOGS_DIR else Path("topic_writer.log
 
 USER_NOTES_START = "<!-- OBSITOCIN:BEGIN USER NOTES -->"
 USER_NOTES_END = "<!-- OBSITOCIN:END USER NOTES -->"
+TIMELINE_START = "<!-- OBSITOCIN:BEGIN TIMELINE -->"
+TIMELINE_END = "<!-- OBSITOCIN:END TIMELINE -->"
 
 
 def log(msg: str) -> None:
@@ -109,6 +111,21 @@ def _extract_preserved_block(content: str) -> str:
     pattern = re.escape(USER_NOTES_START) + r"\n?(.*?)\n?" + re.escape(USER_NOTES_END)
     match = re.search(pattern, content, flags=re.DOTALL)
     return match.group(1).strip("\n") if match else ""
+
+
+def _extract_timeline_block(content: str) -> list[str]:
+    """Extract timeline entries from the preserved timeline block."""
+    if not content:
+        return []
+    pattern = re.escape(TIMELINE_START) + r"\n?(.*?)\n?" + re.escape(TIMELINE_END)
+    match = re.search(pattern, content, flags=re.DOTALL)
+    if not match:
+        return []
+    return [
+        line.lstrip("- ").strip()
+        for line in match.group(1).strip().split("\n")
+        if line.strip().startswith("- ")
+    ]
 
 
 def _extract_fm(content: str, key: str, default: str = "") -> str:
@@ -312,10 +329,13 @@ def write_topic_note(
         if existing_file is not None:
             log(f"[{project}] Fuzzy-matched topic '{topic}' → existing '{existing_file.stem}'")
 
+    timeline_entry = f"{date_str}: {work_summary}"
+
     if existing_file and existing_file.exists():
         existing_content = existing_file.read_text(errors="replace")
         knowledge = _extract_bullet_section(existing_content, "핵심 지식")
         history = _extract_bullet_section(existing_content, "히스토리")
+        timeline = _extract_timeline_block(existing_content)
         preserved_notes = _extract_preserved_block(existing_content)
         created = _extract_fm(existing_content, "created", date_str)
         all_tags = _extract_fm_tags(existing_content) | set(tags)
@@ -323,10 +343,12 @@ def write_topic_note(
         knowledge = _synthesize_knowledge(knowledge, new_knowledge, topic)
 
         history.insert(0, history_entry)
+        timeline.insert(0, timeline_entry)
         target_file = existing_file
     else:
         knowledge = [k for k in new_knowledge if k]
         history = [history_entry]
+        timeline = [timeline_entry]
         preserved_notes = "여기에 직접 정리한 내용을 작성하세요."
         created = date_str
         all_tags = set(tags)
@@ -354,6 +376,7 @@ def write_topic_note(
         else "- (아직 축적된 지식 없음)"
     )
     history_lines = "\n".join(f"- {h}" for h in history)
+    timeline_lines = "\n".join(f"- {t}" for t in timeline)
     tags_yaml = (
         "\n".join(f"  - {t}" for t in sorted(all_tags)) if all_tags else "  - untagged"
     )
@@ -379,6 +402,12 @@ importance: {importance}
 ## 히스토리
 
 {history_lines}
+
+## 변경 이력
+
+{TIMELINE_START}
+{timeline_lines}
+{TIMELINE_END}
 {related_section}
 ## User Notes
 
@@ -387,6 +416,28 @@ importance: {importance}
 {USER_NOTES_END}
 """
     target_file.write_text(content)
+
+    # Record topic update + typed links (best-effort, non-fatal)
+    try:
+        from obsitocin.config import SEARCH_DB_PATH
+        from obsitocin.search_db import (
+            ensure_schema,
+            get_connection,
+            upsert_topic_link,
+            upsert_topic_update,
+        )
+        conn = get_connection(SEARCH_DB_PATH)
+        ensure_schema(conn)
+        upsert_topic_update(conn, project, topic, work_summary=work_summary)
+        if related_topics:
+            for rt in related_topics:
+                if rt != topic:
+                    upsert_topic_link(conn, project, topic, project, rt, "related")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
     return target_file
 
 

@@ -352,6 +352,27 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("/tmp/custom-python", command)
         self.assertIn("obsitocin.qa_logger", command)
 
+    def test_refresh_hook_registration_uses_runtime_python_for_normal_commands(
+        self,
+    ) -> None:
+        with (
+            mock.patch.object(
+                cli, "_ensure_hook_runtime", return_value=Path("/tmp/hook-python")
+            ),
+            mock.patch.object(hooks, "register_hooks") as register_hooks,
+        ):
+            cli._maybe_refresh_hook_registration(cli._cmd_status)
+
+        register_hooks.assert_called_once_with("/tmp/hook-python")
+
+    def test_refresh_hook_registration_skips_init_and_uninstall(self) -> None:
+        with mock.patch.object(hooks, "register_hooks") as register_hooks:
+            cli._maybe_refresh_hook_registration(cli._cmd_init)
+            cli._maybe_refresh_hook_registration(cli._cmd_uninstall)
+            cli._maybe_refresh_hook_registration(None)
+
+        register_hooks.assert_not_called()
+
     def test_hook_python_path_matches_platform(self) -> None:
         venv_dir = Path("/tmp/demo-venv")
         expected = "Scripts/python.exe" if os.name == "nt" else "bin/python"

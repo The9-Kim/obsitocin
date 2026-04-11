@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from obsitocin.search_db import (
+    SCHEMA_VERSION,
     bm25_search,
     delete_qa_entry,
     ensure_schema,
@@ -56,11 +57,11 @@ class TestSchema(unittest.TestCase):
     def test_ensure_schema_idempotent(self):
         conn = _mem_conn()
         ensure_schema(conn)  # call again — should not error
-        self.assertEqual(get_schema_version(conn), 1)
+        self.assertEqual(get_schema_version(conn), SCHEMA_VERSION)
 
     def test_schema_version(self):
         conn = _mem_conn()
-        self.assertEqual(get_schema_version(conn), 1)
+        self.assertEqual(get_schema_version(conn), SCHEMA_VERSION)
 
 
 class TestVectorPacking(unittest.TestCase):

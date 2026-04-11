@@ -52,6 +52,19 @@ def _ensure_hook_runtime() -> Path:
     return python_bin
 
 
+def _maybe_refresh_hook_registration(handler: object | None) -> None:
+    if handler in {_cmd_init, _cmd_uninstall, None}:
+        return
+
+    try:
+        from obsitocin.hooks import register_hooks
+
+        hook_python = _ensure_hook_runtime()
+        register_hooks(str(hook_python))
+    except Exception:
+        pass
+
+
 def _echo(message: str = "") -> None:
     print(message)
 
@@ -450,7 +463,9 @@ def _check_for_updates() -> None:
     try:
         fetch = subprocess.run(
             ["git", "-C", str(repo_dir), "fetch", "--dry-run"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if not fetch.stderr.strip():
             return
@@ -458,15 +473,18 @@ def _check_for_updates() -> None:
         _echo("[obsitocin] 새 버전 감지 — 업데이트 중...")
         subprocess.run(
             ["git", "-C", str(repo_dir), "pull", "--ff-only"],
-            capture_output=True, timeout=30,
+            capture_output=True,
+            timeout=30,
         )
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "-e", f"{repo_dir}[mcp]", "-q"],
-            capture_output=True, timeout=60,
+            capture_output=True,
+            timeout=60,
         )
         # hooks 재등록 (포맷 변경 대응)
         try:
             from obsitocin.hooks import register_hooks
+
             register_hooks()
         except Exception:
             pass
@@ -545,10 +563,13 @@ def _cmd_status(_: argparse.Namespace) -> int:
     if SEARCH_DB_PATH.exists():
         try:
             from obsitocin.search_db import get_connection, get_db_stats
+
             conn = get_connection(SEARCH_DB_PATH)
             stats = get_db_stats(conn)
             conn.close()
-            _echo(f"Search DB: {stats['entries']} entries, {stats['chunks']} chunks, {stats['embeddings']} embeddings")
+            _echo(
+                f"Search DB: {stats['entries']} entries, {stats['chunks']} chunks, {stats['embeddings']} embeddings"
+            )
         except Exception:
             _echo("Search DB: error reading")
     else:
@@ -630,6 +651,70 @@ def _cmd_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_history(args: argparse.Namespace) -> int:
+    from obsitocin.config import OBS_DIR, VAULT_DIR
+
+    if not OBS_DIR or not VAULT_DIR:
+        print("Error: Vault not configured. Run 'obsitocin init'.", file=sys.stderr)
+        return 1
+
+    project = args.project
+    topic = args.topic
+
+    # Find the topic file
+    topics_dir = OBS_DIR / "projects" / project / "topics"
+    target = None
+    if topics_dir.exists():
+        for f in topics_dir.glob("*.md"):
+            if f.stem.lower() == topic.lower():
+                target = f
+                break
+            try:
+                content = f.read_text(errors="replace")
+                import re
+                m = re.search(r"^title:\s*(.+)$", content, re.MULTILINE)
+                if m and m.group(1).strip().lower() == topic.lower():
+                    target = f
+                    break
+            except OSError:
+                continue
+
+    if not target:
+        print(f"Error: Topic '{topic}' not found in project '{project}'.", file=sys.stderr)
+        return 1
+
+    rel_path = target.relative_to(VAULT_DIR)
+    n = getattr(args, "count", 20)
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(VAULT_DIR), "log", f"-{n}", "--oneline", "--", str(rel_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            _echo(f"History for {project}/{topic} ({rel_path}):\n")
+            _echo(result.stdout.strip())
+        else:
+            _echo("No git history found (vault may not be a git repository).")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from obsitocin.doctor import format_doctor_report, run_doctor
+
+    report = run_doctor()
+    if getattr(args, "json_output", False):
+        _echo(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        _echo(format_doctor_report(report))
+    return 0 if report["overall"] == "ok" else 1
+
+
 def _cmd_query(args: argparse.Namespace) -> int:
     filters = {}
     if args.memory_type:
@@ -647,7 +732,13 @@ def _cmd_query(args: argparse.Namespace) -> int:
         else:
             from obsitocin.memory_query import format_results_table, query
 
-            results = query(args.query_text, top_k=args.top_k, filters=filters or None, mode=getattr(args, "mode", "hybrid"))
+            results = query(
+                args.query_text,
+                top_k=args.top_k,
+                filters=filters or None,
+                mode=getattr(args, "mode", "hybrid"),
+                expand=getattr(args, "expand", None),
+            )
             _echo(f'\nResults for: "{args.query_text}"\n')
             _echo(format_results_table(results))
         _report_config_validation()
@@ -753,7 +844,9 @@ def _cmd_migrate(_: argparse.Namespace) -> int:
 
     _echo("Migrating embeddings.json → search.db ...")
     result = migrate_from_json(EMBEDDINGS_INDEX_PATH, PROCESSED_DIR, SEARCH_DB_PATH)
-    _echo(f"Migrated {result['entries_migrated']} entries, {result['chunks_created']} chunks.")
+    _echo(
+        f"Migrated {result['entries_migrated']} entries, {result['chunks_created']} chunks."
+    )
     if result["errors"]:
         _echo(f"Warnings ({len(result['errors'])}):")
         for err in result["errors"][:10]:
@@ -910,7 +1003,9 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         _echo("Nothing to sync. Vault is up to date.")
         return 0
     elif result.status == SyncStatus.SUCCESS:
-        _echo(f"Synced: {result.files_committed} file(s) committed from {result.hostname}")
+        _echo(
+            f"Synced: {result.files_committed} file(s) committed from {result.hostname}"
+        )
         if result.commit_sha:
             _echo(f"Commit: {result.commit_sha[:8]}")
         return 0
@@ -1096,6 +1191,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="hybrid",
         help="Search mode: hybrid (BM25+vector), bm25 (keyword only), vector (semantic only). Default: hybrid.",
     )
+    query_parser.add_argument(
+        "--expand",
+        action="store_true",
+        default=None,
+        help="Expand query via local Qwen LLM for better recall (generates 2-3 variant phrasings).",
+    )
     query_parser.set_defaults(handler=_cmd_query)
 
     concepts_parser = subparsers.add_parser(
@@ -1232,6 +1333,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scan_parser.set_defaults(handler=_cmd_scan)
 
+    history_parser = subparsers.add_parser(
+        "history", help="Show git change history for a topic note."
+    )
+    history_parser.add_argument("project", help="Project name.")
+    history_parser.add_argument("topic", help="Topic name.")
+    history_parser.add_argument(
+        "-n", "--count", type=int, default=20,
+        help="Number of commits to show (default: 20).",
+    )
+    history_parser.set_defaults(handler=_cmd_history)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Run system health diagnostics."
+    )
+    doctor_parser.add_argument(
+        "--json", dest="json_output", action="store_true",
+        help="Output report as JSON.",
+    )
+    doctor_parser.set_defaults(handler=_cmd_doctor)
+
     uninstall_parser = subparsers.add_parser(
         "uninstall", help="Remove Claude Code hooks and optional local config."
     )
@@ -1253,6 +1374,7 @@ def main() -> None:
     if handler is None:
         parser.print_help()
         return
+    _maybe_refresh_hook_registration(handler)
     raise SystemExit(handler(args))
 
 

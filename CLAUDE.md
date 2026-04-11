@@ -20,6 +20,8 @@
 - `reindex.py`: vault MD에서 search.db를 재구축. `reindex_from_vault()` (주제 노트) + `reindex_from_processed()` (QA).
 - `session_scanner.py`: 멀티 에이전트 세션 로그 스캔. claude_code/codex/gemini 디렉토리 탐색 → queue 변환.
 - `qa_logger.py`: 훅 핸들러. queue JSON에 `source_type: "claude_code"` + `source_metadata` 포함.
+- 훅 등록은 `~/.claude/settings.json`에 절대 경로(`runtime` python + repo `src`)를 저장하므로, 저장소 이동/이름 변경 시 재등록이 필요하다.
+- `cli.main()`은 일반 명령 실행 전에 `register_hooks()`를 한 번 더 호출해 stale hook 경로를 자동 복구한다.
 - `identity.py`: `compute_content_hash()` (레거시, 변경 금지) + `compute_source_hash()` (범용).
 - `pii.py`: 정규식 PII 감지. `--detect-pii --redact-pii --skip-sensitive`.
 - 태깅 프롬프트: "질문의 잘못된 가정을 사실로 추출하지 말 것" 가드 포함.
