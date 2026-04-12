@@ -35,12 +35,23 @@ def _strip_system_noise(text: str) -> str:
     # <system-reminder>...</system-reminder> 등 XML 블록
     text = re.sub(
         r"<(?:system-reminder|auto-slash-command|command-instruction|session-context|"
-        r"Work_Context|omo-env|env|directories)>.*?</(?:system-reminder|auto-slash-command|"
-        r"command-instruction|session-context|Work_Context|omo-env|env|directories)>",
+        r"Work_Context|omo-env|env|directories|task-notification|task-result)>"
+        r".*?"
+        r"</(?:system-reminder|auto-slash-command|command-instruction|session-context|"
+        r"Work_Context|omo-env|env|directories|task-notification|task-result)>",
         "",
         text,
         flags=re.DOTALL,
     )
+    # Self-closing or orphaned internal XML tags (e.g. <task-id>...</task-id>)
+    text = re.sub(
+        r"<(?:task-id|tool-use-id|task-notification|task-result)[^>]*>.*?</(?:task-id|tool-use-id|task-notification|task-result)>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    # Catch any remaining orphaned <task-*> tags (unclosed)
+    text = re.sub(r"</?task-[a-z-]*>", "", text)
     # [analyze-mode] ... --- 패턴
     text = re.sub(
         r"\[(?:analyze-mode|search-mode|auto-slash-command)\].*?---",
