@@ -15,14 +15,20 @@ def _check_hook_registration() -> dict:
     try:
         settings = json.loads(settings_path.read_text())
         hooks = settings.get("hooks", {})
-        has_submit = any(
-            "obsitocin" in cmd.get("command", "")
-            for cmd in hooks.get("UserPromptSubmit", [])
-        )
-        has_stop = any(
-            "obsitocin" in cmd.get("command", "")
-            for cmd in hooks.get("Stop", [])
-        )
+
+        def _has_obsitocin_hook(entries: list) -> bool:
+            for entry in entries:
+                # Flat format: {"command": "..."}
+                if isinstance(entry, dict) and "obsitocin" in entry.get("command", ""):
+                    return True
+                # Nested format: {"hooks": [{"type": "command", "command": "..."}]}
+                for hook in entry.get("hooks", []) if isinstance(entry, dict) else []:
+                    if isinstance(hook, dict) and "obsitocin" in hook.get("command", ""):
+                        return True
+            return False
+
+        has_submit = _has_obsitocin_hook(hooks.get("UserPromptSubmit", []))
+        has_stop = _has_obsitocin_hook(hooks.get("Stop", []))
         if has_submit and has_stop:
             return {"status": "ok", "message": "UserPromptSubmit + Stop hooks registered"}
         missing = []
