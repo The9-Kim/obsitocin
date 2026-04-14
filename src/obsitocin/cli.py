@@ -271,7 +271,7 @@ def _check_dependencies(llm_provider: str | None = None) -> None:
         _echo(f"Embedding server port: {EMBED_PORT}")
     else:
         _echo(
-            "Embedding model: not configured (query/embed commands will fail until set)"
+            "Embedding model: not configured (query/reindex --embed will fail until set)"
         )
         user_path = _prompt_text(
             "  Enter embedding GGUF path (or press Enter to skip): "
@@ -573,7 +573,7 @@ def _cmd_status(_: argparse.Namespace) -> int:
         except Exception:
             _echo("Search DB: error reading")
     else:
-        _echo("Search DB: not created (run 'obsitocin migrate')")
+        _echo("Search DB: not created (run 'obsitocin reindex')")
     _echo()
 
     from obsitocin.hooks import check_hooks
@@ -782,79 +782,6 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_embed(_: argparse.Namespace) -> int:
-    from obsitocin.embeddings import (
-        build_embeddings_for_qas,
-        is_configured,
-        start_embed_server,
-        stop_embed_server,
-    )
-
-    if not is_configured():
-        print(
-            "Error: embedding model not configured. Set OBS_EMBED_MODEL_PATH or place a Qwen3-Embedding GGUF under ~/.local/share/obsitocin/models/.",
-            file=sys.stderr,
-        )
-        return 1
-
-    qa_files = []
-    for filepath in sorted(PROCESSED_DIR.glob("*.json")):
-        try:
-            qa = json.loads(filepath.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if qa.get("status") in ("processed", "written"):
-            qa_files.append((filepath.stem, qa))
-
-    if not qa_files:
-        _echo("No processed Q&A pairs found.")
-        return 0
-
-    _echo(f"Found {len(qa_files)} Q&A pairs to index.")
-    try:
-        try:
-            start_embed_server()
-            count = build_embeddings_for_qas(qa_files)
-            _echo(f"Generated {count} semantic embedding vectors.")
-
-            try:
-                from obsitocin.config import OBS_DIR
-                from obsitocin.embeddings import embed_topic_notes
-
-                if OBS_DIR is not None and OBS_DIR.exists():
-                    topic_count = embed_topic_notes(OBS_DIR)
-                    if topic_count > 0:
-                        _echo(f"Generated {topic_count} topic note embedding vectors.")
-            except Exception as topic_error:
-                _echo(
-                    f"Warning: Topic note embedding failed (non-fatal): {topic_error}"
-                )
-        finally:
-            stop_embed_server()
-        _report_config_validation()
-        return 0
-    except Exception as error:
-        print(f"Error: {error}", file=sys.stderr)
-        return 1
-
-
-def _cmd_migrate(_: argparse.Namespace) -> int:
-    from obsitocin.config import EMBEDDINGS_INDEX_PATH, SEARCH_DB_PATH
-    from obsitocin.search_db import migrate_from_json
-
-    _echo("Migrating embeddings.json → search.db ...")
-    result = migrate_from_json(EMBEDDINGS_INDEX_PATH, PROCESSED_DIR, SEARCH_DB_PATH)
-    _echo(
-        f"Migrated {result['entries_migrated']} entries, {result['chunks_created']} chunks."
-    )
-    if result["errors"]:
-        _echo(f"Warnings ({len(result['errors'])}):")
-        for err in result["errors"][:10]:
-            _echo(f"  - {err}")
-    _report_config_validation()
-    return 0
-
-
 def _cmd_organize(args: argparse.Namespace) -> int:
     from obsitocin.organizer import execute_organize, plan_organize
 
@@ -1036,8 +963,51 @@ def _cmd_reindex(args: argparse.Namespace) -> int:
             _echo(f"  - {err}")
 
     if getattr(args, "embed", False):
+        from obsitocin.embeddings import (
+            build_embeddings_for_qas,
+            embed_topic_notes,
+            is_configured,
+            start_embed_server,
+            stop_embed_server,
+        )
+
+        if not is_configured():
+            print(
+                "Error: embedding model not configured. Set OBS_EMBED_MODEL_PATH or place a Qwen3-Embedding GGUF under ~/.local/share/obsitocin/models/.",
+                file=sys.stderr,
+            )
+            return 1
+
+        qa_files = []
+        for filepath in sorted(PROCESSED_DIR.glob("*.json")):
+            try:
+                qa = json.loads(filepath.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if qa.get("status") in ("processed", "written"):
+                qa_files.append((filepath.stem, qa))
+
+        if not qa_files:
+            _echo("No processed Q&A pairs found.")
+            return 0
+
         _echo("Regenerating embeddings...")
-        return _cmd_embed(args)
+        _echo(f"Found {len(qa_files)} Q&A pairs to index.")
+        try:
+            try:
+                start_embed_server()
+                count = build_embeddings_for_qas(qa_files)
+                _echo(f"Generated {count} semantic embedding vectors.")
+
+                if OBS_DIR is not None and OBS_DIR.exists():
+                    topic_count = embed_topic_notes(OBS_DIR)
+                    if topic_count > 0:
+                        _echo(f"Generated {topic_count} topic note embedding vectors.")
+            finally:
+                stop_embed_server()
+        except Exception as error:
+            print(f"Error: {error}", file=sys.stderr)
+            return 1
 
     _report_config_validation()
     return 0
@@ -1145,13 +1115,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_parser = subparsers.add_parser(
         "verify",
-        help="Check queue, processed files, and embeddings index consistency.",
+        help="Check queue, processed files, and search database consistency.",
     )
     verify_parser.set_defaults(handler=_cmd_verify)
 
     cleanup_parser = subparsers.add_parser(
         "cleanup",
-        help="Remove orphan prompt files and stale embeddings index entries.",
+        help="Remove orphan prompt files and stale search database entries.",
     )
     cleanup_parser.add_argument(
         "--dry-run",
@@ -1218,17 +1188,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save the answer to the wiki.",
     )
     ask_parser.set_defaults(handler=_cmd_ask)
-
-    embed_parser = subparsers.add_parser(
-        "embed", help="Generate semantic embedding vectors for processed Q&A pairs."
-    )
-    embed_parser.set_defaults(handler=_cmd_embed)
-
-    migrate_parser = subparsers.add_parser(
-        "migrate",
-        help="Migrate embeddings.json to SQLite search database.",
-    )
-    migrate_parser.set_defaults(handler=_cmd_migrate)
 
     organize_parser = subparsers.add_parser(
         "organize",

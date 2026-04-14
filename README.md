@@ -208,9 +208,9 @@ obsitocin scan codex --dry-run           # 미리보기
 obsitocin scan codex --limit 10          # 최대 10개만
 
 # 데이터베이스
-obsitocin migrate                        # embeddings.json → SQLite 마이그레이션
 obsitocin reindex                        # vault + processed → search.db 재구축
 obsitocin reindex --from-vault           # vault 주제 노트만 재구축
+obsitocin reindex --embed                # search.db 재구축 + 임베딩 생성
 
 # Vault 품질 관리
 obsitocin lint                         # 콘텐츠 점검 (4가지)
@@ -224,7 +224,6 @@ obsitocin status                       # 상태 확인
 obsitocin verify                       # 데이터 무결성 검사
 obsitocin cleanup                      # 고아 파일 정리
 obsitocin cleanup --dry-run            # 정리 미리보기
-obsitocin embed                        # 임베딩 재생성 (Q&A + 주제 노트)
 obsitocin serve                        # MCP 서버 시작
 obsitocin uninstall                    # 훅 제거
 ```

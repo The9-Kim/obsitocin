@@ -105,7 +105,7 @@ def _check_search_db() -> dict:
     """Check search.db status."""
     from obsitocin.config import SEARCH_DB_PATH
     if not SEARCH_DB_PATH.exists():
-        return {"status": "warn", "message": "search.db not found (run obsitocin migrate)"}
+        return {"status": "warn", "message": "search.db not found (run obsitocin reindex)"}
     try:
         from obsitocin.search_db import get_connection, get_db_stats, get_schema_version
         conn = get_connection(SEARCH_DB_PATH, readonly=True)

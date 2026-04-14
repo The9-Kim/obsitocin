@@ -177,15 +177,6 @@ _op(Operation(
 ))
 
 _op(Operation(
-    name="embed",
-    description="임베딩 생성",
-    params=(),
-    cli_command="embed",
-    mcp_tool=None,
-    tags=("pipeline",),
-))
-
-_op(Operation(
     name="sync",
     description="Git vault 동기화",
     params=(),
@@ -227,15 +218,6 @@ _op(Operation(
     description="시스템 진단",
     params=(),
     cli_command="doctor",
-    mcp_tool=None,
-    tags=("admin",),
-))
-
-_op(Operation(
-    name="migrate",
-    description="embeddings.json → search.db 마이그레이션",
-    params=(),
-    cli_command="migrate",
     mcp_tool=None,
     tags=("admin",),
 ))
