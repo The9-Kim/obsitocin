@@ -117,27 +117,6 @@ class TestReadTopic(unittest.TestCase):
         self.assertIn("Error:", content)
 
 
-class TestSearchKnowledge(unittest.TestCase):
-    def test_search_without_embed_returns_empty_list(self):
-        mcp_server = load_mcp_server()
-
-        with mock.patch(
-            "obsitocin.memory_query.query", side_effect=RuntimeError("embed missing")
-        ):
-            result = mcp_server.search_knowledge("Docker containers")
-
-        self.assertEqual(result, [])
-
-    def test_search_returns_results_when_query_succeeds(self):
-        mcp_server = load_mcp_server()
-
-        expected = [{"title": "Docker 기초 개념"}]
-        with mock.patch("obsitocin.memory_query.query", return_value=expected):
-            result = mcp_server.search_knowledge("Docker")
-
-        self.assertEqual(result, expected)
-
-
 class TestCreateServer(unittest.TestCase):
     def test_create_server_is_exported(self):
         mcp_server = load_mcp_server()

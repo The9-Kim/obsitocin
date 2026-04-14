@@ -377,20 +377,6 @@ def get_project_context(project: str | None = None) -> str:
     return result
 
 
-def search_knowledge(query: str, top_k: int = 5) -> list[dict]:
-    from obsitocin.embeddings import log
-    from obsitocin.memory_query import query as memory_query
-
-    try:
-        return memory_query(query, top_k=top_k)
-    except RuntimeError as exc:
-        log(f"MCP search_knowledge unavailable: {exc}")
-        return []
-    except Exception as exc:
-        log(f"MCP search_knowledge failed: {exc}")
-        return []
-
-
 def recall_multi(queries: list[dict], top_k: int = 5) -> list[dict]:
     """Execute multiple typed queries and merge results.
 
@@ -398,7 +384,10 @@ def recall_multi(queries: list[dict], top_k: int = 5) -> list[dict]:
                  "date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD",
                  "filters": {...}}
     """
-    from obsitocin.memory_query import query as memory_query
+    try:
+        from obsitocin.memory_query import query as memory_query
+    except Exception as e:
+        return [{"error": f"Failed to load memory_query: {e}"}]
 
     all_results: list[dict] = []
     seen_ids: set[str] = set()
@@ -423,8 +412,9 @@ def recall_multi(queries: list[dict], top_k: int = 5) -> list[dict]:
 
         try:
             results = memory_query(text, top_k=top_k, filters=filters or None, mode=mode)
-        except Exception:
-            results = []
+        except Exception as e:
+            all_results.append({"error": f"Query failed: {e}", "query": text})
+            continue
 
         for r in results:
             fid = r.get("file_id", "")
@@ -445,12 +435,17 @@ def create_server():
             "Install it with: pip install 'obsitocin[mcp]'"
         ) from exc
 
-    mcp = FastMCP("obsitocin")
+    # Pre-start embedding server to avoid timeout during recall calls
+    try:
+        from obsitocin.embeddings import is_configured, start_embed_server, log
+        if is_configured():
+            log("MCP: Pre-starting embedding server...")
+            start_embed_server()
+            log("MCP: Embedding server ready")
+    except Exception as e:
+        print(f"MCP: Embedding server not available: {e}")
 
-    @mcp.tool(name="search_knowledge")
-    def search_knowledge_tool(query: str, top_k: int = 5) -> list[dict]:
-        """Search the knowledge vault semantically."""
-        return search_knowledge(query, top_k=top_k)
+    mcp = FastMCP("obsitocin")
 
     @mcp.tool(name="list_topics")
     def list_topics_tool(project: str | None = None) -> list[dict]:

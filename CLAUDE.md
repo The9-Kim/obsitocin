@@ -6,7 +6,7 @@
 
 - `processor.py`: `source_type` 분기 태깅 (`claude_code` → Q&A 프롬프트, 기타 → 범용 프롬프트). `compute_content_hash()` 출력 변경 금지 (레거시 호환).
 - `source_adapter.py`: `SourceItem` Protocol + `KNOWN_SOURCE_TYPES` = {claude_code, codex, gemini, claude_ai, slack, jira, confluence, git, manual}. 새 소스는 여기 등록.
-- `mcp_server.py`: FastMCP 9개 도구 — search_knowledge, list_topics, read_topic, get_work_log, save_insight, get_project_context, ingest_source, ask_wiki, recall. `fastmcp`는 optional dep.
+- `mcp_server.py`: FastMCP 8개 도구 — list_topics, read_topic, get_work_log, save_insight, get_project_context, ingest_source, ask_wiki, recall. `fastmcp`는 optional dep.
 - `embeddings.py`: Q&A + 주제 노트를 동일 인덱스에 저장. 주제 노트 키: `topic:{project}:{title}`. JSON + SQLite 듀얼 라이트.
 - `search_db.py`: SQLite + FTS5 검색 DB. BM25 키워드 검색 + 벡터 검색. `embeddings.json` 대체/보완. 마이그레이션: `obsitocin migrate`.
 - `hybrid_search.py`: BM25 + 벡터를 RRF(k=60)로 결합. mode: hybrid/bm25/vector.
