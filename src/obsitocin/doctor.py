@@ -107,9 +107,8 @@ def _check_search_db() -> dict:
     if not SEARCH_DB_PATH.exists():
         return {"status": "warn", "message": "search.db not found (run obsitocin migrate)"}
     try:
-        from obsitocin.search_db import ensure_schema, get_connection, get_db_stats, get_schema_version
-        conn = get_connection(SEARCH_DB_PATH)
-        ensure_schema(conn)
+        from obsitocin.search_db import get_connection, get_db_stats, get_schema_version
+        conn = get_connection(SEARCH_DB_PATH, readonly=True)
         version = get_schema_version(conn)
         stats = get_db_stats(conn)
         conn.close()
@@ -131,7 +130,7 @@ def _check_embedding_coverage() -> dict:
         return {"status": "warn", "message": "search.db not found"}
     try:
         from obsitocin.search_db import get_connection, get_db_stats
-        conn = get_connection(SEARCH_DB_PATH)
+        conn = get_connection(SEARCH_DB_PATH, readonly=True)
         stats = get_db_stats(conn)
         conn.close()
         entries = stats.get("entries", 0)

@@ -564,7 +564,7 @@ def _cmd_status(_: argparse.Namespace) -> int:
         try:
             from obsitocin.search_db import get_connection, get_db_stats
 
-            conn = get_connection(SEARCH_DB_PATH)
+            conn = get_connection(SEARCH_DB_PATH, readonly=True)
             stats = get_db_stats(conn)
             conn.close()
             _echo(

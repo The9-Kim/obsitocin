@@ -123,11 +123,20 @@ CREATE INDEX IF NOT EXISTS idx_topic_links_target
 # ── Connection ──
 
 
-def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
-    """Open a WAL-mode connection with foreign keys enabled."""
+def get_connection(
+    db_path: Path | None = None, readonly: bool = False
+) -> sqlite3.Connection:
+    """Open a SQLite connection.
+
+    Use read-only mode for diagnostics/status commands that should not require
+    write access to WAL/SHM sidecar files.
+    """
     path = str(db_path or SEARCH_DB_PATH)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
+    if readonly:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    else:
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     return conn
