@@ -34,6 +34,7 @@ def reindex_from_vault(vault_dir: Path, db_path: Path) -> dict:
 
     Returns {"indexed": int, "errors": list[str]}
     """
+    from obsitocin.embeddings import text_hash
     from obsitocin.search_db import ensure_schema, get_connection, upsert_qa_entry
 
     conn = get_connection(db_path)
@@ -79,6 +80,7 @@ def reindex_from_vault(vault_dir: Path, db_path: Path) -> dict:
                     "project": project_dir.name,
                     "timestamp": "",
                     "content_hash": "",
+                    "embed_text_hash": text_hash(full_text),
                     "source_type": "topic_note",
                     "full_text": full_text,
                 }
@@ -97,6 +99,7 @@ def reindex_from_processed(processed_dir: Path, db_path: Path) -> dict:
 
     Returns {"indexed": int, "errors": list[str]}
     """
+    from obsitocin.embeddings import qa_to_embed_text, text_hash
     from obsitocin.search_db import ensure_schema, get_connection, upsert_qa_entry
 
     conn = get_connection(db_path)
@@ -135,6 +138,7 @@ def reindex_from_processed(processed_dir: Path, db_path: Path) -> dict:
                 "project": Path(qa.get("cwd", "")).name if qa.get("cwd") else "",
                 "timestamp": qa.get("timestamp", ""),
                 "content_hash": qa.get("content_hash", ""),
+                "embed_text_hash": text_hash(qa_to_embed_text(qa)),
                 "source_type": qa.get("source_type", "qa"),
                 "full_text": qa.get("prompt", "") + "\n" + qa.get("response", ""),
             }

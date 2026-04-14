@@ -15,7 +15,7 @@ from pathlib import Path
 
 from obsitocin.config import SEARCH_DB_PATH
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # ── Schema ──
 
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS qa_entries (
     project       TEXT NOT NULL DEFAULT '',
     timestamp     TEXT NOT NULL DEFAULT '',
     content_hash  TEXT NOT NULL DEFAULT '',
+    embed_text_hash TEXT NOT NULL DEFAULT '',
     source_type   TEXT NOT NULL DEFAULT 'qa',
     full_text     TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -145,6 +146,14 @@ def get_connection(
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create tables/indexes/triggers if not present. Idempotent."""
     conn.executescript(_SCHEMA_SQL)
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(qa_entries)").fetchall()
+    }
+    if "embed_text_hash" not in columns:
+        conn.execute(
+            "ALTER TABLE qa_entries ADD COLUMN embed_text_hash TEXT NOT NULL DEFAULT ''"
+        )
     conn.execute(
         "INSERT OR REPLACE INTO db_meta(key, value) VALUES (?, ?)",
         ("schema_version", str(SCHEMA_VERSION)),
@@ -188,15 +197,16 @@ def upsert_qa_entry(conn: sqlite3.Connection, file_id: str, metadata: dict) -> i
     conn.execute(
         """INSERT INTO qa_entries(
             file_id, title, work_summary, category, importance, memory_type,
-            tags, key_concepts, project, timestamp, content_hash, source_type,
+            tags, key_concepts, project, timestamp, content_hash, embed_text_hash, source_type,
             full_text, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(file_id) DO UPDATE SET
             title=excluded.title, work_summary=excluded.work_summary,
             category=excluded.category, importance=excluded.importance,
             memory_type=excluded.memory_type, tags=excluded.tags,
             key_concepts=excluded.key_concepts, project=excluded.project,
             timestamp=excluded.timestamp, content_hash=excluded.content_hash,
+            embed_text_hash=excluded.embed_text_hash,
             source_type=excluded.source_type, full_text=excluded.full_text,
             updated_at=excluded.updated_at
         """,
@@ -212,6 +222,7 @@ def upsert_qa_entry(conn: sqlite3.Connection, file_id: str, metadata: dict) -> i
             metadata.get("project", ""),
             metadata.get("timestamp", ""),
             metadata.get("content_hash", ""),
+            metadata.get("embed_text_hash", ""),
             metadata.get("source_type", "qa"),
             metadata.get("full_text", ""),
             now,
@@ -238,6 +249,59 @@ def get_qa_entry(conn: sqlite3.Connection, file_id: str) -> dict | None:
     if not row:
         return None
     return dict(row)
+
+
+def get_embedded_entry(conn: sqlite3.Connection, file_id: str) -> dict | None:
+    """Fetch entry metadata plus one stored embedding vector, if present."""
+    row = conn.execute(
+        """
+        SELECT e.file_id, e.embed_text_hash, e.source_type, e.updated_at, emb.embedding
+        FROM qa_entries e
+        LEFT JOIN chunks c ON e.file_id = c.file_id AND c.chunk_index = 0
+        LEFT JOIN embeddings emb ON c.chunk_id = emb.chunk_id
+        WHERE e.file_id = ?
+        """,
+        (file_id,),
+    ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    blob = result.pop("embedding", None)
+    if blob is not None:
+        result["embedding"] = unpack_embedding(blob)
+    return result
+
+
+def export_index(conn: sqlite3.Connection) -> dict:
+    """Export DB embeddings in the legacy index shape for compatibility."""
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT e.file_id, e.embed_text_hash, e.source_type, e.updated_at, emb.embedding
+        FROM qa_entries e
+        JOIN chunks c ON e.file_id = c.file_id AND c.chunk_index = 0
+        JOIN embeddings emb ON c.chunk_id = emb.chunk_id
+        ORDER BY e.file_id
+        """
+    ).fetchall()
+
+    entries: dict[str, dict] = {}
+    dimensions = 0
+    for row in rows:
+        embedding = unpack_embedding(row["embedding"])
+        if embedding and not dimensions:
+            dimensions = len(embedding)
+        entries[row["file_id"]] = {
+            "embedding": embedding,
+            "text_hash": row["embed_text_hash"],
+            "created_at": row["updated_at"],
+            "source_type": row["source_type"],
+        }
+    return {
+        "model": "search.db",
+        "dimensions": dimensions,
+        "entries": entries,
+    }
 
 
 # ── CRUD: chunks + embeddings ──
@@ -497,6 +561,7 @@ def migrate_from_json(
                     "project": project,
                     "timestamp": entry.get("created_at", ""),
                     "content_hash": entry.get("text_hash", ""),
+                    "embed_text_hash": entry.get("text_hash", ""),
                     "source_type": "topic_note",
                     "full_text": title,
                 }
@@ -514,6 +579,7 @@ def migrate_from_json(
                     "project": Path(qa.get("cwd", "")).name if qa.get("cwd") else "",
                     "timestamp": qa.get("timestamp", ""),
                     "content_hash": qa.get("content_hash", entry.get("text_hash", "")),
+                    "embed_text_hash": entry.get("text_hash", ""),
                     "source_type": qa.get("source_type", "qa"),
                     "full_text": "",
                 }

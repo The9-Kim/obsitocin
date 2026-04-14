@@ -344,7 +344,13 @@ def _synthesize_knowledge(existing: list[str], new: list[str], topic: str) -> li
             if line.strip().startswith("- ")
         ]
         if lines:
-            return lines
+            merged_lines = list(lines)
+            known = set(lines)
+            for item in existing + new:
+                if item and item not in known:
+                    merged_lines.append(item)
+                    known.add(item)
+            return merged_lines
     except Exception as e:
         log(f"Knowledge synthesis failed, falling back to append: {e}")
 

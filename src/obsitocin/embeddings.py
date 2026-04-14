@@ -21,6 +21,8 @@ from obsitocin.config import (
     LOGS_DIR,
     MAX_PROMPT_CHARS,
     MAX_RESPONSE_CHARS,
+    OBS_DIR,
+    PROCESSED_DIR,
     SEARCH_DB_PATH,
 )
 
@@ -323,6 +325,7 @@ def _sync_qas_to_db(
                 "project": Path(qa.get("cwd", "")).name if qa.get("cwd") else "",
                 "timestamp": qa.get("timestamp", ""),
                 "content_hash": qa.get("content_hash", ""),
+                "embed_text_hash": text_hash(embed_text),
                 "source_type": qa.get("source_type", "qa"),
                 "full_text": embed_text,
             }
@@ -379,6 +382,7 @@ def _sync_topics_to_db(
                 "tags": [],
                 "key_concepts": [title],
                 "project": project,
+                "embed_text_hash": text_hash(embed_text),
                 "source_type": "topic_note",
                 "full_text": embed_text,
             }
@@ -403,19 +407,67 @@ def _sync_topics_to_db(
         log(f"SQLite dual-write (topics) failed (non-fatal): {e}")
 
 
+def _migrate_legacy_index_if_needed() -> None:
+    if not EMBEDDINGS_INDEX_PATH.exists():
+        return
+
+    try:
+        from obsitocin.search_db import (
+            ensure_schema,
+            get_connection,
+            get_db_stats,
+            migrate_from_json,
+        )
+
+        conn = get_connection(SEARCH_DB_PATH)
+        ensure_schema(conn)
+        stats = get_db_stats(conn)
+        conn.close()
+
+        if stats.get("embeddings", 0) == 0:
+            result = migrate_from_json(
+                EMBEDDINGS_INDEX_PATH,
+                PROCESSED_DIR,
+                SEARCH_DB_PATH,
+                OBS_DIR,
+            )
+            if result["errors"]:
+                log(
+                    "Legacy embeddings migration warnings: "
+                    + "; ".join(result["errors"][:5])
+                )
+
+        if EMBEDDINGS_INDEX_PATH.exists():
+            EMBEDDINGS_INDEX_PATH.unlink()
+            log("Removed legacy embeddings.json after DB migration")
+    except Exception as error:
+        log(f"Legacy embeddings migration skipped: {error}")
+
+
 def load_index() -> dict:
-    if EMBEDDINGS_INDEX_PATH.exists():
-        try:
-            return json.loads(EMBEDDINGS_INDEX_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"model": "", "dimensions": 0, "entries": {}}
+    _migrate_legacy_index_if_needed()
+    try:
+        from obsitocin.search_db import ensure_schema, export_index, get_connection
+
+        conn = get_connection(SEARCH_DB_PATH)
+        ensure_schema(conn)
+        index = export_index(conn)
+        conn.close()
+        return index
+    except Exception:
+        return {"model": "", "dimensions": 0, "entries": {}}
 
 
 def save_index(index: dict) -> None:
-    EMBEDDINGS_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    EMBEDDINGS_INDEX_PATH.write_text(json.dumps(index, ensure_ascii=False))
-    log(f"Saved embeddings index: {len(index.get('entries', {}))} entries")
+    if EMBEDDINGS_INDEX_PATH.exists():
+        try:
+            EMBEDDINGS_INDEX_PATH.unlink()
+            log("Removed legacy embeddings.json")
+        except OSError:
+            pass
+    log(
+        f"Embeddings stored in search.db: {len(index.get('entries', {}))} entries"
+    )
 
 
 def build_embeddings_for_qas(qa_files: list[tuple[str, dict]]) -> int:

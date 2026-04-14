@@ -34,6 +34,7 @@ class TestQueryIncludesTopicNotes(unittest.TestCase):
         query_embedding = [1.0] + [0.0] * 15
 
         with (
+            mock.patch("obsitocin.memory_query._db_has_entries", return_value=False),
             mock.patch("obsitocin.memory_query.is_configured", return_value=True),
             mock.patch("obsitocin.memory_query.start_embed_server"),
             mock.patch("obsitocin.memory_query.stop_embed_server"),

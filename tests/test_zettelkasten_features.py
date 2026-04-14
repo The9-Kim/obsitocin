@@ -18,6 +18,7 @@ from obsitocin import maintenance
 from obsitocin import processor
 from obsitocin import embeddings
 from obsitocin import provider
+from obsitocin import search_db
 from obsitocin.identity import compute_content_hash
 from obsitocin.pii import PIIDetector, risk_meets_threshold
 
@@ -502,20 +503,40 @@ class PipelineSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             processed_dir = Path(tmpdir) / "processed"
             processed_dir.mkdir(parents=True)
-            index_path = Path(tmpdir) / "embeddings.json"
-            index_path.write_text(
-                json.dumps(
-                    {
-                        "entries": {
-                            "missing": {"embedding": [1.0]},
-                        }
-                    }
-                )
+            db_path = Path(tmpdir) / "search.db"
+            conn = search_db.get_connection(db_path)
+            search_db.ensure_schema(conn)
+            search_db.upsert_qa_entry(
+                conn,
+                "missing",
+                {
+                    "title": "Missing",
+                    "work_summary": "",
+                    "category": "other",
+                    "importance": 3,
+                    "memory_type": "dynamic",
+                    "tags": [],
+                    "key_concepts": [],
+                    "project": "test",
+                    "timestamp": "",
+                    "content_hash": "abc",
+                    "embed_text_hash": "emb",
+                    "source_type": "qa",
+                    "full_text": "Missing",
+                },
             )
+            chunk_ids = search_db.upsert_chunks(
+                conn,
+                "missing",
+                [{"chunk_index": 0, "chunk_text": "Missing", "text_hash": "emb"}],
+            )
+            search_db.store_chunk_embeddings(conn, [(chunk_ids[0], [1.0])])
+            conn.commit()
+            conn.close()
 
             with (
                 mock.patch.object(maintenance, "PROCESSED_DIR", processed_dir),
-                mock.patch.object(maintenance, "EMBEDDINGS_INDEX_PATH", index_path),
+                mock.patch.object(maintenance, "SEARCH_DB_PATH", db_path),
                 mock.patch.object(maintenance, "QUEUE_DIR", Path(tmpdir) / "queue"),
             ):
                 report = maintenance.verify_state()
@@ -546,7 +567,7 @@ class EmbeddingBackendTests(unittest.TestCase):
 
     def test_build_embeddings_for_qas_uses_batch_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            index_path = Path(tmpdir) / "embeddings.json"
+            db_path = Path(tmpdir) / "search.db"
             qa_files = [
                 (
                     "file1",
@@ -564,13 +585,13 @@ class EmbeddingBackendTests(unittest.TestCase):
             ]
 
             with (
-                mock.patch.object(embeddings, "EMBEDDINGS_INDEX_PATH", index_path),
+                mock.patch.object(embeddings, "SEARCH_DB_PATH", db_path),
                 mock.patch.object(
                     embeddings, "get_embeddings_batch", return_value=[[0.1, 0.2, 0.3]]
                 ),
             ):
                 count = embeddings.build_embeddings_for_qas(qa_files)
-                saved = json.loads(index_path.read_text())
+                saved = embeddings.load_index()
 
             self.assertEqual(count, 1)
             self.assertEqual(saved["dimensions"], 3)
@@ -578,7 +599,7 @@ class EmbeddingBackendTests(unittest.TestCase):
 
     def test_build_embeddings_for_qas_falls_back_to_individual_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            index_path = Path(tmpdir) / "embeddings.json"
+            db_path = Path(tmpdir) / "search.db"
             qa_files = [
                 (
                     "file1",
@@ -591,7 +612,7 @@ class EmbeddingBackendTests(unittest.TestCase):
             ]
 
             with (
-                mock.patch.object(embeddings, "EMBEDDINGS_INDEX_PATH", index_path),
+                mock.patch.object(embeddings, "SEARCH_DB_PATH", db_path),
                 mock.patch.object(
                     embeddings,
                     "get_embeddings_batch",
@@ -600,7 +621,7 @@ class EmbeddingBackendTests(unittest.TestCase):
                 mock.patch.object(embeddings, "get_embedding", return_value=[0.4, 0.5]),
             ):
                 count = embeddings.build_embeddings_for_qas(qa_files)
-                saved = json.loads(index_path.read_text())
+                saved = embeddings.load_index()
 
             self.assertEqual(count, 1)
             self.assertEqual(saved["dimensions"], 2)

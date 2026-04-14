@@ -64,8 +64,8 @@ class TestEmbedTopicNotes(unittest.TestCase):
                 return_value=[mock_embedding, mock_embedding],
             ),
             mock.patch(
-                "obsitocin.embeddings.EMBEDDINGS_INDEX_PATH",
-                Path(self.tmp) / "test_index.json",
+                "obsitocin.embeddings.SEARCH_DB_PATH",
+                Path(self.tmp) / "search.db",
             ),
         ):
             count = embed_topic_notes(self.vault_dir)
@@ -76,17 +76,17 @@ class TestEmbedTopicNotes(unittest.TestCase):
         from obsitocin.embeddings import embed_topic_notes, load_index
 
         mock_embedding = [0.1] * 16
-        index_path = Path(self.tmp) / "test_index.json"
+        db_path = Path(self.tmp) / "search.db"
         with (
             mock.patch(
                 "obsitocin.embeddings.get_embeddings_batch",
                 return_value=[mock_embedding, mock_embedding],
             ),
-            mock.patch("obsitocin.embeddings.EMBEDDINGS_INDEX_PATH", index_path),
+            mock.patch("obsitocin.embeddings.SEARCH_DB_PATH", db_path),
         ):
             embed_topic_notes(self.vault_dir)
 
-        with mock.patch("obsitocin.embeddings.EMBEDDINGS_INDEX_PATH", index_path):
+        with mock.patch("obsitocin.embeddings.SEARCH_DB_PATH", db_path):
             index = load_index()
 
         topic_keys = [k for k in index["entries"].keys() if k.startswith("topic:")]
@@ -107,13 +107,13 @@ class TestEmbedTopicNotes(unittest.TestCase):
         from obsitocin.embeddings import embed_topic_notes
 
         mock_embedding = [0.1] * 16
-        index_path = Path(self.tmp) / "test_index.json"
+        db_path = Path(self.tmp) / "search.db"
         with (
             mock.patch(
                 "obsitocin.embeddings.get_embeddings_batch",
                 return_value=[mock_embedding, mock_embedding],
             ),
-            mock.patch("obsitocin.embeddings.EMBEDDINGS_INDEX_PATH", index_path),
+            mock.patch("obsitocin.embeddings.SEARCH_DB_PATH", db_path),
         ):
             embed_topic_notes(self.vault_dir)
 
@@ -121,7 +121,7 @@ class TestEmbedTopicNotes(unittest.TestCase):
             mock.patch(
                 "obsitocin.embeddings.get_embeddings_batch", return_value=[]
             ) as mock_batch,
-            mock.patch("obsitocin.embeddings.EMBEDDINGS_INDEX_PATH", index_path),
+            mock.patch("obsitocin.embeddings.SEARCH_DB_PATH", db_path),
         ):
             second_count = embed_topic_notes(self.vault_dir)
 
