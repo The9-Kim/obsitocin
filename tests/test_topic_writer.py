@@ -334,6 +334,29 @@ class TestSessionRawPreservation(unittest.TestCase):
             self.assertIn(qa["prompt"], content)
             self.assertIn(qa["response"], content)
 
+    def test_session_raw_escapes_html_like_prompt(self):
+        """HTML-like prompt content should be escaped so Obsidian does not render it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa(
+                prompt='<div class="jira-field"><select><option>High</option></select></div>'
+            )
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+
+            date_str = "2026-04-05"
+            sessions_dir = vault_dir / "raw" / "sessions" / date_str
+            raw_file = next(sessions_dir.glob("*.md"))
+            content = raw_file.read_text(encoding="utf-8")
+
+            self.assertIn(
+                '&lt;div class="jira-field"&gt;&lt;select&gt;&lt;option&gt;High&lt;/option&gt;&lt;/select&gt;&lt;/div&gt;',
+                content,
+            )
+
     def test_daily_log_links_to_raw(self):
         """Daily work log entry contains a wikilink to the raw session file."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,3 +374,97 @@ class TestSessionRawPreservation(unittest.TestCase):
             log_content = log_file.read_text(encoding="utf-8")
             self.assertIn("원문", log_content)
             self.assertIn("raw/sessions/", log_content)
+
+    def test_topic_knowledge_escapes_html_like_tags(self):
+        """HTML-like tags in topic knowledge should be escaped in topic notes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = self._make_vault(tmp)
+            qa = make_processed_qa(
+                tagging_result={
+                    "title": "네이티브 셀렉트 정리",
+                    "should_store": True,
+                    "topics": [
+                        {
+                            "name": "네이티브 웹 컴포넌트",
+                            "knowledge": [
+                                "PrimeVue 외의 네이티브 <select> 태그도 필터 매칭 대상에 포함됨."
+                            ],
+                        }
+                    ],
+                    "work_summary": "네이티브 <select> 처리 확인",
+                    "tags": ["html", "ui"],
+                    "category": "frontend",
+                    "importance": 3,
+                    "memory_type": "static",
+                    "key_concepts": ["네이티브 웹 컴포넌트"],
+                    "distilled_knowledge": [
+                        "PrimeVue 외의 네이티브 <select> 태그도 필터 매칭 대상에 포함됨."
+                    ],
+                }
+            )
+
+            from obsitocin.topic_writer import write_notes_for_qa
+
+            with mock.patch("obsitocin.topic_writer.OBS_DIR", vault_dir):
+                write_notes_for_qa(qa)
+
+            topic_file = (
+                vault_dir
+                / "projects"
+                / "test-project"
+                / "topics"
+                / "네이티브 웹 컴포넌트.md"
+            )
+            content = topic_file.read_text(encoding="utf-8")
+            daily_content = (vault_dir / "daily" / "2026-04-05.md").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn(
+                "PrimeVue 외의 네이티브 &lt;select&gt; 태그도 필터 매칭 대상에 포함됨.",
+                content,
+            )
+            self.assertIn("네이티브 &lt;select&gt; 처리 확인", daily_content)
+
+
+class TestHtmlLikeMigration(unittest.TestCase):
+    def test_migration_escapes_existing_html_and_preserves_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault_dir = Path(tmp) / "obsitocin"
+            vault_dir.mkdir(parents=True, exist_ok=True)
+
+            md_file = vault_dir / "sample.md"
+            md_file.write_text(
+                """---
+title: sample
+---
+
+# Sample
+
+본문에 <select><option>High</option></select> 가 있음.
+
+```html
+<div>keep raw in fence</div>
+```
+
+<!-- OBSITOCIN:BEGIN USER NOTES -->
+<!-- OBSITOCIN:END USER NOTES -->
+""",
+                encoding="utf-8",
+            )
+
+            from obsitocin.topic_writer import migrate_html_like_markdown_in_vault
+
+            dry_result = migrate_html_like_markdown_in_vault(vault_dir, dry_run=True)
+            self.assertEqual(dry_result["files_changed"], 1)
+
+            apply_result = migrate_html_like_markdown_in_vault(vault_dir, dry_run=False)
+            self.assertEqual(apply_result["files_changed"], 1)
+
+            content = md_file.read_text(encoding="utf-8")
+            self.assertIn(
+                "본문에 &lt;select&gt;&lt;option&gt;High&lt;/option&gt;&lt;/select&gt; 가 있음.",
+                content,
+            )
+            self.assertIn("<div>keep raw in fence</div>", content)
+            self.assertIn("<!-- OBSITOCIN:BEGIN USER NOTES -->", content)

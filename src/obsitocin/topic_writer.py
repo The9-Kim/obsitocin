@@ -40,6 +40,77 @@ TIMELINE_START = "<!-- OBSITOCIN:BEGIN TIMELINE -->"
 TIMELINE_END = "<!-- OBSITOCIN:END TIMELINE -->"
 
 
+def _escape_html_like_markdown(text: str) -> str:
+    """Escape HTML-like tags outside fenced code blocks for safer Obsidian rendering."""
+    if not text:
+        return text
+
+    out: list[str] = []
+    in_fence = False
+    tag_pattern = re.compile(r"<[A-Za-z!/][^>\n]*>")
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+
+        if not in_fence and tag_pattern.search(line):
+            line = line.replace("<", "&lt;").replace(">", "&gt;")
+        out.append(line)
+
+    return "\n".join(out)
+
+
+def _escape_html_like_document(text: str) -> str:
+    """Escape HTML-like tags in a full markdown document while preserving frontmatter and markers."""
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    if not lines:
+        return text
+
+    start_idx = 0
+    preserved: list[str] = []
+
+    if lines[0] == "---":
+        preserved.append(lines[0])
+        i = 1
+        while i < len(lines):
+            preserved.append(lines[i])
+            if lines[i] == "---":
+                i += 1
+                break
+            i += 1
+        start_idx = i
+
+    body = lines[start_idx:]
+    out: list[str] = []
+    in_fence = False
+    tag_pattern = re.compile(r"<[A-Za-z!/][^>\n]*>")
+
+    for line in body:
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if stripped.startswith("<!-- OBSITOCIN:"):
+            out.append(line)
+            continue
+        if not in_fence and tag_pattern.search(line):
+            line = line.replace("<", "&lt;").replace(">", "&gt;")
+        out.append(line)
+
+    merged = preserved + out
+    result = "\n".join(merged)
+    if text.endswith("\n"):
+        result += "\n"
+    return result
+
+
 def log(msg: str) -> None:
     if LOGS_DIR:
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -320,7 +391,8 @@ def write_topic_note(
         date_str = datetime.now().strftime("%Y-%m-%d")
         time_str = datetime.now().strftime("%H:%M")
 
-    history_entry = f"{date_str} {time_str}: {work_summary}"
+    safe_work_summary = _escape_html_like_markdown(work_summary)
+    history_entry = f"{date_str} {time_str}: {safe_work_summary}"
 
     index = _scan_topic_index(project)
     existing_file = index.get(concept_lookup_key(topic))
@@ -329,7 +401,7 @@ def write_topic_note(
         if existing_file is not None:
             log(f"[{project}] Fuzzy-matched topic '{topic}' → existing '{existing_file.stem}'")
 
-    timeline_entry = f"{date_str}: {work_summary}"
+    timeline_entry = f"{date_str}: {safe_work_summary}"
 
     if existing_file and existing_file.exists():
         existing_content = existing_file.read_text(errors="replace")
@@ -341,12 +413,13 @@ def write_topic_note(
         all_tags = _extract_fm_tags(existing_content) | set(tags)
 
         knowledge = _synthesize_knowledge(knowledge, new_knowledge, topic)
+        knowledge = [_escape_html_like_markdown(k) for k in knowledge]
 
         history.insert(0, history_entry)
         timeline.insert(0, timeline_entry)
         target_file = existing_file
     else:
-        knowledge = [k for k in new_knowledge if k]
+        knowledge = [_escape_html_like_markdown(k) for k in new_knowledge if k]
         history = [history_entry]
         timeline = [timeline_entry]
         preserved_notes = "여기에 직접 정리한 내용을 작성하세요."
@@ -548,8 +621,8 @@ def _write_session_raw(
     frontmatter_parts.append("---")
     frontmatter = "\n".join(frontmatter_parts)
 
-    prompt = qa.get("prompt", "(없음)")
-    response = qa.get("response", "(없음)")
+    prompt = _escape_html_like_markdown(qa.get("prompt", "(없음)"))
+    response = _escape_html_like_markdown(qa.get("response", "(없음)"))
     title = tagging.get("title", "Untitled")
 
     body_parts = [
@@ -578,6 +651,40 @@ def _write_session_raw(
     return filepath
 
 
+def migrate_html_like_markdown_in_vault(
+    vault_dir: Path, dry_run: bool = True
+) -> dict[str, object]:
+    """Escape HTML-like tags in existing markdown files across a vault."""
+    changed_files: list[str] = []
+    errors: list[str] = []
+
+    for md_file in sorted(vault_dir.rglob("*.md")):
+        try:
+            original = md_file.read_text(encoding="utf-8")
+        except OSError as e:
+            errors.append(f"{md_file}: {e}")
+            continue
+
+        updated = _escape_html_like_document(original)
+        if updated == original:
+            continue
+
+        changed_files.append(str(md_file.relative_to(vault_dir)))
+        if not dry_run:
+            try:
+                md_file.write_text(updated, encoding="utf-8")
+            except OSError as e:
+                errors.append(f"{md_file}: {e}")
+
+    return {
+        "vault_dir": str(vault_dir),
+        "dry_run": dry_run,
+        "changed_files": changed_files,
+        "files_changed": len(changed_files),
+        "errors": errors,
+    }
+
+
 def append_work_log(
     project: str,
     date_str: str,
@@ -595,7 +702,7 @@ def append_work_log(
 
     topic_links = ", ".join(f"[[{_topic_rel_path(project, t)}|{t}]]" for t in topics)
 
-    entry = f"- {time_str} [{project}] {work_summary}"
+    entry = f"- {time_str} [{project}] {_escape_html_like_markdown(work_summary)}"
     if topic_links:
         entry += f" → {topic_links}"
     if session_raw_path is not None:
