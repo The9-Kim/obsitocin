@@ -8,7 +8,7 @@ user-invocable: true
 
 # 저장소 검색
 
-시맨틱 임베딩으로 지식 그래프 저장소를 검색합니다.
+`search.db` 기반 hybrid search(BM25 + vector + RRF)로 지식 그래프 저장소를 검색합니다.
 
 ## 검색어: $ARGUMENTS
 
@@ -24,6 +24,7 @@ user-invocable: true
 4. **추가 탐색 제안** — 결과와 관련된 후속 탐색 주제가 있다면 언급
 
 검색 결과가 없으면 대체 검색어나 더 넓은 쿼리를 제안합니다.
+필요하면 `--mode bm25`로 키워드 검색만 시도하거나, 로컬 인덱스가 비어 있으면 `obsitocin reindex --embed`를 먼저 제안합니다.
 
 검색 모드:
 - `hybrid` (기본): BM25 키워드 + 벡터 시맨틱 검색을 RRF로 결합
