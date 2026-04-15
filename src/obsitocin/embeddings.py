@@ -32,10 +32,11 @@ _embed_server_proc = None
 
 
 def log(msg: str) -> None:
+    import sys
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
-    print(line, flush=True)
+    print(line, flush=True, file=sys.stderr)
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
 

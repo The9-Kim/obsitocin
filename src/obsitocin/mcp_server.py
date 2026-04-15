@@ -435,15 +435,17 @@ def create_server():
             "Install it with: pip install 'obsitocin[mcp]'"
         ) from exc
 
-    # Pre-start embedding server to avoid timeout during recall calls
-    try:
-        from obsitocin.embeddings import is_configured, start_embed_server, log
-        if is_configured():
-            log("MCP: Pre-starting embedding server...")
-            start_embed_server()
-            log("MCP: Embedding server ready")
-    except Exception as e:
-        print(f"MCP: Embedding server not available: {e}")
+    # Pre-start embedding server in background thread to avoid MCP handshake timeout
+    def _start_embed_async():
+        try:
+            from obsitocin.embeddings import is_configured, start_embed_server
+            if is_configured():
+                start_embed_server()
+        except Exception:
+            pass
+
+    import threading
+    threading.Thread(target=_start_embed_async, daemon=True).start()
 
     mcp = FastMCP("obsitocin")
 
