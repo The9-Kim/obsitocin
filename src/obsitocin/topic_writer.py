@@ -22,7 +22,7 @@ from obsitocin.concepts import (
     concept_note_stem,
     find_fuzzy_topic_match,
 )  # concept_note_stem: legacy only
-from obsitocin.config import LOGS_DIR, OBS_DIR
+from obsitocin.config import GIT_AUTO_SYNC, LOGS_DIR, OBS_DIR
 
 
 def _topic_file_stem(text: str) -> str:
@@ -897,8 +897,22 @@ def write_notes_for_qa(qa: dict) -> dict:
     update_project_index(project)
     update_moc()
 
+    # Auto git sync if enabled
+    sync_result = None
+    if GIT_AUTO_SYNC:
+        try:
+            from obsitocin.git_sync import sync
+            sync_result = sync()
+            if sync_result.status.value == "success":
+                log(f"[git] Auto-synced: {sync_result.files_committed} files → {sync_result.commit_sha[:7]}")
+            elif sync_result.status.value != "nothing_to_sync":
+                log(f"[git] Auto-sync issue: {sync_result.status.value}")
+        except Exception as e:
+            log(f"[git] Auto-sync failed: {e}")
+
     return {
         "project": project,
         "topics_written": len(written_topics),
         "work_log_updated": bool(work_summary),
+        "git_synced": sync_result.status.value if sync_result else None,
     }
