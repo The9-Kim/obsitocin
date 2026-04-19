@@ -414,7 +414,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         schema_path.write_text(_generate_schema_md())
         _echo("SCHEMA.md created.")
 
-    from obsitocin.hooks import register_hooks
+    from obsitocin.hooks import register_hooks, register_mcp_server, register_shell_alias
 
     try:
         hook_python = _ensure_hook_runtime()
@@ -434,12 +434,15 @@ def _cmd_init(args: argparse.Namespace) -> int:
     else:
         _echo("Claude Code hooks already registered.")
 
-    from obsitocin.hooks import register_mcp_server
-
     if register_mcp_server(sys.executable):
         _echo("MCP server registered in Claude Code settings.")
     else:
         _echo("MCP server already registered.")
+
+    if register_shell_alias():
+        _echo("Shell alias and PYTHONPATH added to ~/.zshrc (or ~/.bashrc).")
+    else:
+        _echo("Shell alias already configured.")
 
     _install_skill()
     _echo("vault-search skill installed globally.")

@@ -228,6 +228,52 @@ def unregister_mcp_server() -> bool:
     return True
 
 
+def register_shell_alias() -> bool:
+    """Add obsitocin alias and PYTHONPATH to shell config (~/.zshrc or ~/.bashrc).
+
+    Returns True if added, False if already exists or failed.
+    """
+    zshrc = Path.home() / ".zshrc"
+    bashrc = Path.home() / ".bashrc"
+
+    # Identify primary shell config
+    shell_env = os.environ.get("SHELL", "")
+    if "zsh" in shell_env:
+        target = zshrc
+    elif "bash" in shell_env:
+        target = bashrc
+    else:
+        # Fallback to .zshrc if exists, else .bashrc
+        target = zshrc if zshrc.exists() else bashrc
+
+    project_root = PROJECT_SRC.parent
+    python_bin = sys.executable
+    # If running from venv, sys.executable is the venv python
+    
+    alias_line = f"alias obsitocin='{python_bin} -m obsitocin.cli'"
+    pythonpath_line = f"export PYTHONPATH=\"$PYTHONPATH:{PROJECT_SRC}\""
+    
+    marker = "# obsitocin setup"
+    block = f"\n{marker}\n{alias_line}\n{pythonpath_line}\n"
+
+    if not target.exists():
+        try:
+            target.touch()
+        except OSError:
+            return False
+
+    try:
+        content = target.read_text()
+        if alias_line in content:
+            return False
+
+        with open(target, "a") as f:
+            f.write(block)
+        return True
+    except OSError:
+        return False
+
+
 def check_hooks() -> dict[str, bool]:
     """Check which obsitocin hooks are currently registered.
 

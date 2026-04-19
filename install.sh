@@ -131,15 +131,17 @@ ok "초기화 완료"
 
 # ── 12. shell alias ──
 info "shell alias 등록"
-ALIAS_LINE="alias obsitocin='$INSTALL_DIR/.venv/bin/obsitocin'"
 ZSHRC="$HOME/.zshrc"
+ALIAS_BLOCK="# obsitocin setup
+alias obsitocin='$INSTALL_DIR/.venv/bin/python3 -m obsitocin.cli'
+export PYTHONPATH=\$PYTHONPATH:$INSTALL_DIR/src"
+
 if [ -f "$ZSHRC" ] && grep -qF "alias obsitocin=" "$ZSHRC"; then
     ok "이미 등록됨 — 스킵"
 else
     echo "" >> "$ZSHRC"
-    echo "# obsitocin" >> "$ZSHRC"
-    echo "$ALIAS_LINE" >> "$ZSHRC"
-    ok "~/.zshrc에 alias 추가됨"
+    echo "$ALIAS_BLOCK" >> "$ZSHRC"
+    ok "~/.zshrc에 alias 및 PYTHONPATH 추가됨"
 fi
 
 echo ""
