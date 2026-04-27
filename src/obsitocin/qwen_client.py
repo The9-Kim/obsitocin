@@ -25,10 +25,25 @@ def is_qwen_configured() -> bool:
     return bool(server_ok) and QWEN_MODEL_PATH != Path("") and QWEN_MODEL_PATH.exists()
 
 
+def _is_server_running() -> bool:
+    """Check if llama-server is already listening on QWEN_PORT."""
+    try:
+        resp = urllib.request.urlopen(
+            f"http://127.0.0.1:{QWEN_PORT}/health", timeout=2
+        )
+        return resp.status == 200
+    except Exception:
+        return False
+
+
 def start_qwen_server() -> subprocess.Popen:
     global _qwen_server_proc
     if _qwen_server_proc is not None and _qwen_server_proc.poll() is None:
         return _qwen_server_proc
+
+    # Reuse an already-running server (e.g. survived a reboot or prior run)
+    if _is_server_running():
+        return _qwen_server_proc  # None — callers only check for exceptions
 
     server_bin = Path(LLAMA_SERVER_BIN)
     if not server_bin.exists():

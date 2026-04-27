@@ -45,9 +45,24 @@ def is_configured() -> bool:
     return EMBED_MODEL_PATH != Path("") and EMBED_MODEL_PATH.exists()
 
 
+def _is_embed_server_running() -> bool:
+    """Check if embedding server is already listening on EMBED_PORT."""
+    try:
+        resp = urllib.request.urlopen(
+            f"http://127.0.0.1:{EMBED_PORT}/health", timeout=2
+        )
+        return resp.status == 200
+    except Exception:
+        return False
+
+
 def start_embed_server() -> subprocess.Popen:
     global _embed_server_proc
     if _embed_server_proc is not None and _embed_server_proc.poll() is None:
+        return _embed_server_proc
+
+    # Reuse an already-running server (e.g. survived a reboot or prior run)
+    if _is_embed_server_running():
         return _embed_server_proc
 
     if not is_configured():
